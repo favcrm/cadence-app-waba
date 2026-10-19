@@ -1,0 +1,65 @@
+{
+  "contract": "app-screens/v2",
+  "app": "waba",
+  "entry": "client.js",
+  "startup": [
+    "runtime.js",
+    "client.js"
+  ],
+  "assets": [
+    {
+      "name": "runtime.js",
+      "media_type": "text/javascript",
+      "size": 191017,
+      "sha256": "sha256:40f7f0974e37eb5d5abdc45068ccba60cb151c499a7fe6a03d5bc86a323da642"
+    },
+    {
+      "name": "client.js",
+      "media_type": "text/javascript",
+      "size": 30057,
+      "sha256": "sha256:2f28c2c4e63125bcc31b01ff1a68e6d330d946bd6a31dbcedf5392a42b5a8a33"
+    },
+    {
+      "name": "waba.css",
+      "media_type": "text/css",
+      "size": 25279,
+      "sha256": "sha256:163bde6c1490e8ec68a6fd26fc523c36a1094acc81c6ae02abe25e4c4633d924"
+    }
+  ],
+  "provenance": {
+    "source_digest": "sha256:4baa7efed37b1a221a054b3779ce51265668368355c784fb1fd5ce3646b15ff1",
+    "sdk_digest": "sha256:fd65c974511e63b3996e9fa7e438fb4e39df5f508d11636116ef150fcc123e35",
+    "toolchain_digest": "sha256:e21cfc8222db408abe6ba5a482520639d9cf4b96481c19aff4b4246af8a65e42"
+  },
+  "host_contract": "screen-records.v1",
+  "may": [
+    "records.call",
+    "records.slot"
+  ],
+  "tools": {},
+  "operations": [
+    "whatsapp.status",
+    "whatsapp.connect_session",
+    "whatsapp.conversations.list",
+    "whatsapp.conversations.show",
+    "whatsapp.messages",
+    "whatsapp.reply.prepare",
+    "whatsapp.reply.status",
+    "screen.route.patch",
+    "whatsapp.reply.send"
+  ],
+  "navigation": {
+    "section_query": "waba",
+    "default_section": "inbox",
+    "sections": [
+      {
+        "id": "inbox",
+        "label": "Inbox"
+      },
+      {
+        "id": "connection",
+        "label": "Connection"
+      }
+    ]
+  }
+}

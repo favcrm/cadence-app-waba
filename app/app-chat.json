@@ -1,0 +1,21 @@
+{
+  "contract": "app-chat/v1",
+  "app": "waba",
+  "contexts": [
+    {
+      "id": "inbox",
+      "label": "Inbox",
+      "prompts": ["Which conversations need a reply?", "Summarise today's messages"],
+      "record": {
+        "label": "Conversation",
+        "prompts": ["Summarise this conversation", "Draft a reply"]
+      }
+    },
+    {
+      "id": "connection",
+      "label": "Connection",
+      "prompts": ["Is my WhatsApp number connected?", "Explain the webhook status"]
+    }
+  ],
+  "presentation": { "showContext": true }
+}
