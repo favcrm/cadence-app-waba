@@ -1,0 +1,40 @@
+/* WhatsApp app layout. Shared controls, tokens and themes come from the SDK. */
+.waba { gap: 0.75rem; }
+.waba-page { display: grid; gap: 0.75rem; align-content: start; min-width: 0; }
+.waba-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; min-width: 0; }
+.waba-head h1, .waba-head h2 { flex: 1 1 10rem; min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.waba-card { display: grid; gap: 0.75rem; align-content: start; min-width: 0; padding: 0.75rem; border: 1px solid var(--color-edge); border-radius: 0.5rem; }
+.waba-card h2 { margin: 0; }
+.waba-card p { margin: 0; }
+.waba-muted { color: var(--color-ink-500); font-size: var(--text-secondary); overflow-wrap: anywhere; }
+.waba-manual { display: grid; gap: 0.5rem; min-width: 0; }
+.waba-manual p { margin: 0; }
+.waba-manual input { width: 100%; min-width: 0; font-family: var(--font-mono); }
+
+.waba-inbox { grid-template-columns: minmax(15rem, 22rem) minmax(0, 1fr); align-items: start; }
+.waba-list, .waba-thread { display: grid; gap: 0.5rem; align-content: start; min-width: 0; }
+.waba-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.25rem; }
+.waba-row { display: grid; gap: 0.125rem; width: 100%; text-align: start; padding: 0.5rem; border: 1px solid var(--color-edge); border-radius: 0.375rem; background: none; color: inherit; font: inherit; cursor: pointer; min-width: 0; }
+.waba-row:hover { border-color: var(--color-edge-hover); }
+.waba-row[aria-current="true"] { border-color: var(--color-accent); }
+.waba-row:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.waba-row-name { display: flex; align-items: center; gap: 0.375rem; font-weight: 600; overflow-wrap: anywhere; }
+.waba-row-last { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.waba-badge { padding: 0 0.375rem; border-radius: 999px; background: var(--color-accent); color: var(--color-on-accent); font-size: var(--text-micro); }
+.waba-back { display: none; }
+
+.waba-messages { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+.waba-message { display: grid; gap: 0.125rem; max-width: min(36rem, 85%); padding: 0.5rem 0.625rem; border: 1px solid var(--color-edge); border-radius: 0.5rem; justify-self: start; }
+.waba-message[data-direction="outbound"] { justify-self: end; border-color: var(--color-accent); }
+.waba-message p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.waba-composer { display: grid; gap: 0.5rem; min-width: 0; }
+.waba-composer textarea { width: 100%; min-width: 0; resize: vertical; }
+.waba-quote { margin: 0.5rem 0; padding-inline-start: 0.625rem; border-inline-start: 2px solid var(--color-edge); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Narrow: one pane at a time; Back returns to the list. */
+@media (max-width: 47.99rem) {
+  .waba-inbox { grid-template-columns: minmax(0, 1fr); }
+  .waba-inbox[data-selected="yes"] .waba-list { display: none; }
+  .waba-inbox[data-selected="no"] .waba-thread { display: none; }
+  .waba-back { display: inline-flex; }
+}
