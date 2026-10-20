@@ -30,12 +30,13 @@ export default function WabaScreen() {
   const mode = prefs[scope.installId] ?? stored.mode;
   // The copilot is offered only in copilot mode and only where the host granted its reads.
   const copilot = mode === "copilot" && can("whatsapp.draft.show");
+  const handoff = { set: can("whatsapp.handoff.set"), release: can("whatsapp.handoff.release") };
   const assist = { show: copilot, brief: copilot && can("chat.whatsapp.brief"), open: copilot && can("chat.whatsapp.open"), discard: copilot && can("whatsapp.draft.discard") };
   return <main className="app-outlet waba" key={`${scope.installId}:${scope.contextId}:${snapshot.digest}`}>
     {route.section === "connection" ? <Connection scope={scope} canConnect={viewer.canConnect} />
       : route.section === "templates" ? <Templates scope={scope} canSend={viewer.canTemplate} routeId={route.record_id} recipient={recipient} onRecipient={setRecipient} />
       : route.section === "ai" ? <AiAgent installId={scope.installId} mode={mode} persisted={stored.persisted} onMode={m => setPrefs(p => ({ ...p, [scope.installId]: m }))} />
       : route.section === "broadcasts" ? <Broadcasts scope={scope} rights={rights} routeId={route.record_id} creating={route.view === "new"} />
-      : <Inbox scope={scope} canReply={viewer.canReply} canTemplate={viewer.canTemplate} assist={assist} routeId={route.record_id} onRecipient={setRecipient} />}
+      : <Inbox scope={scope} canReply={viewer.canReply} canTemplate={viewer.canTemplate} assist={assist} handoff={handoff} routeId={route.record_id} onRecipient={setRecipient} />}
   </main>;
 }

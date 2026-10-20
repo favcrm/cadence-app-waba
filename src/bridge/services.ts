@@ -30,6 +30,8 @@ export interface CallArgs {
   "chat.whatsapp.open": { conversation_id: string };
   "whatsapp.draft.show": { conversation_id: string };
   "whatsapp.draft.discard": { conversation_id: string };
+  // CAD-1651 (favcrm/cadence#1199): takeover. Set is an operator write; release is a host confirm card.
+  "whatsapp.handoff.set": { conversation_id: string };
   "screen.route.patch": { section?: Section; view?: "list" | "new"; record_id?: string | null; segment_id?: string | null; replace?: boolean };
 }
 export type Section = "connection" | "inbox" | "templates" | "broadcasts" | "ai";
@@ -43,6 +45,7 @@ export interface SlotArgs {
   "whatsapp.broadcast.stop": { broadcast_id: string };
   /** CAD-1636: the host shows the card; the operator's tap confirms this exact guidance (at most 2000). */
   "chat.whatsapp.brief": { conversation_id: string; guidance: string };
+  "whatsapp.handoff.release": { conversation_id: string };
 }
 // A closed field allowlist is checked again at runtime before serialization.
 export const CALL_FIELDS: Record<keyof CallArgs, readonly string[]> = {
@@ -57,6 +60,7 @@ export const CALL_FIELDS: Record<keyof CallArgs, readonly string[]> = {
   "whatsapp.broadcast.draft": ["broadcast_id", "name", "template_id", "body_parameters", "audience"],
   "whatsapp.broadcast.test.prepare": ["broadcast_id", "to"], "whatsapp.broadcast.prepare": ["broadcast_id", "send_at"],
   "chat.whatsapp.open": ["conversation_id"], "whatsapp.draft.show": ["conversation_id"], "whatsapp.draft.discard": ["conversation_id"],
+  "whatsapp.handoff.set": ["conversation_id"],
   "screen.route.patch": ["section", "view", "record_id", "segment_id", "replace"],
 };
 export const SLOT_FIELDS: Record<keyof SlotArgs, readonly string[]> = {
@@ -64,6 +68,7 @@ export const SLOT_FIELDS: Record<keyof SlotArgs, readonly string[]> = {
   "whatsapp.template.send": ["effect_id", "conversation_id", "template_id", "variables"],
   "whatsapp.broadcast.test.send": ["effect_id"], "whatsapp.broadcast.send": ["effect_id"], "whatsapp.broadcast.stop": ["broadcast_id"],
   "chat.whatsapp.brief": ["conversation_id", "guidance"],
+  "whatsapp.handoff.release": ["conversation_id"],
 };
 export const OPERATIONS = [...Object.keys(CALL_FIELDS), ...Object.keys(SLOT_FIELDS)];
 export function cleanArgs(verb: string, args: Bag, slot: boolean): Bag {

@@ -9,10 +9,12 @@ import { declinedReason,errorText,parseConversation,parseConversations,parseDraf
 const PAGE = 25;
 /** What the copilot may show, derived from the host-granted actions (members get the draft read-only). */
 export interface Assist { show: boolean; brief: boolean; open: boolean; discard: boolean }
+/** Takeover actions the host granted; the banner itself is shown to everyone. */
+export interface Handoff { set: boolean; release: boolean }
 const DRAFT_POLL_MS = 5000;
 type Load<T> = { state: "loading" } | { state: "ok"; value: T } | { state: "failed"; text: string };
 
-export default function Inbox({ scope, canReply, canTemplate, assist, routeId: routed, onRecipient }: { scope: DisplayScope; canReply: boolean; canTemplate: boolean; assist: Assist; routeId: string | null; onRecipient: (r: Recipient) => void }) {
+export default function Inbox({ scope, canReply, canTemplate, assist, handoff, routeId: routed, onRecipient }: { scope: DisplayScope; canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; routeId: string | null; onRecipient: (r: Recipient) => void }) {
   const [rows, setRows] = useState<ConversationRow[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [list, setList] = useState<"loading" | "ok" | "more" | string>("loading");
@@ -60,13 +62,13 @@ export default function Inbox({ scope, canReply, canTemplate, assist, routeId: r
       {cursor && !failed && <Button size="sm" onClick={() => { void page(cursor); }} loading={list === "more"}>Load more</Button>}
     </div>
     <div className="waba-thread">
-      {selected ? <Thread key={selected} scope={scope} id={selected} canReply={canReply} canTemplate={canTemplate} assist={assist} onRecipient={onRecipient} onBack={() => select(null)} />
+      {selected ? <Thread key={selected} scope={scope} id={selected} canReply={canReply} canTemplate={canTemplate} assist={assist} handoff={handoff} onRecipient={onRecipient} onBack={() => select(null)} />
         : <EmptyState title="Select a conversation" name="thread">Messages and the reply composer appear here.</EmptyState>}
     </div>
   </section>;
 }
 
-function Thread({ scope, id, canReply, canTemplate, assist, onRecipient, onBack }: { scope: DisplayScope; id: string; canReply: boolean; canTemplate: boolean; assist: Assist; onRecipient: (r: Recipient) => void; onBack: () => void }) {
+function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient, onBack }: { scope: DisplayScope; id: string; canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; onRecipient: (r: Recipient) => void; onBack: () => void }) {
   const [conversation, setConversation] = useState<Load<Conversation>>({ state: "loading" });
   const [messages, setMessages] = useState<Load<{ rows: Message[]; cursor: string | null }>>({ state: "loading" });
   // `quiet` is a host-push refresh: shown data stays on a failed read, and
@@ -115,6 +117,7 @@ function Thread({ scope, id, canReply, canTemplate, assist, onRecipient, onBack 
       <h2 id="waba-thread-title">{c ? c.contact.name ?? c.contact.phone ?? "Unknown contact" : "Conversation"}</h2>
       <Button size="sm" onClick={reload}>Refresh</Button>
     </header>
+    {c && <TakeoverBar scope={scope} id={id} handoffAt={c.handoffAt} rights={handoff} onChanged={() => { void show(); }} />}
     {assist.brief && <Brief scope={scope} id={id} canOpen={assist.open} />}
     {draft && <DraftChip draft={draft} canInsert={canReply && !!c && windowOpen(c)} canDiscard={assist.discard} note={assistNote} onInsert={() => setInserted(i => ({ text: draft.text, n: (i?.n ?? 0) + 1 }))} onDiscard={() => { void discard(); }} />}
     {conversation.state === "loading" ? <Loading>Reading the conversation…</Loading>
@@ -130,7 +133,7 @@ function Thread({ scope, id, canReply, canTemplate, assist, onRecipient, onBack 
             <span className="waba-muted">{when(m.createdAt)}{m.status ? ` · ${m.status}` : ""}</span>
           </li>)}</ol>}
       </>}
-    {c && (canReply ? <Composer scope={scope} conversation={c} inserted={inserted} onSent={onSent} onChanged={reload} />
+    {c && (canReply ? <Composer scope={scope} conversation={c} autoTakeover={handoff.set} inserted={inserted} onSent={onSent} onChanged={reload} />
       : <Notice state="read-only">You can read this inbox. Only the workspace operator can reply.</Notice>)}
     {c && canTemplate && <Button size="sm" onClick={() => { onRecipient(c); void patchRoute({ section: "templates", view: "list", record_id: null }).catch(() => undefined); }}>Send an approved template…</Button>}
   </article>;
@@ -173,11 +176,43 @@ function DraftChip({ draft, canInsert, canDiscard, note, onInsert, onDiscard }: 
   </Notice>;
 }
 
+/** Takeover state from the conversation read (`handoffAt`, FavCRM's one source of truth).
+ *  Everyone sees the banner; only granted actions show buttons. After any refusal the
+ *  conversation is read again and the host's own reason stays on screen. */
+function TakeoverBar({ scope, id, handoffAt, rights, onChanged }: { scope: DisplayScope; id: string; handoffAt: string | null; rights: Handoff; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  async function run(kind: "set" | "release") {
+    setBusy(true); setNote(null);
+    try {
+      if (kind === "set") await serviceCall(scope, "whatsapp.handoff.set", { conversation_id: id });
+      else await serviceSlot(scope, "whatsapp.handoff.release", { conversation_id: id });
+      setNote({ ok: true, text: kind === "set" ? "Taken over. FavCRM's AI is paused on this conversation." : "Handed back. FavCRM's AI may reply automatically again." });
+    } catch (e) {
+      const reason = kind === "release" && declinedReason(e).cancelled ? "the card was cancelled." : errorText(e, "the host refused it.");
+      setNote({ ok: false, text: `${kind === "set" ? "Not taken over" : "Not handed back"}: ${reason}` });
+    }
+    setBusy(false); onChanged();
+  }
+  if (!handoffAt && !note && !rights.set) return null;
+  return <div className="waba-assist" aria-label="Takeover">
+    {handoffAt
+      ? <Notice state="taken-over"><strong>Taken over.</strong> FavCRM&apos;s AI is paused on this conversation since {when(handoffAt)}.</Notice>
+      : rights.set && <p className="waba-muted">FavCRM&apos;s AI may reply automatically here. Replying yourself pauses it.</p>}
+    {(handoffAt ? rights.release : rights.set) && <div className="waba-head">
+      {handoffAt
+        ? <Button size="sm" loading={busy} onClick={() => { void run("release"); }}>Hand back to AI…</Button>
+        : <Button size="sm" loading={busy} onClick={() => { void run("set"); }}>Take over</Button>}
+    </div>}
+    {note && (note.ok ? <p className="waba-muted" role="status">{note.text}</p> : <ErrorNotice bare>{note.text}</ErrorNotice>)}
+  </div>;
+}
+
 /** One reply = prepare (host mints the effect and digest) → the host-drawn
  *  approval SLOT over exactly the prepared text. Nothing is retried. */
 type Attempt = { text: string; effectId: string } & ({ state: "approving" } | { state: ReplyState } | { state: "checking" } | { state: "status"; status: ReplyStatus } | { state: "cancelled"; reason: string | null });
 
-function Composer({ scope, conversation, inserted, onSent, onChanged }: { scope: DisplayScope; conversation: Conversation; inserted: { text: string; n: number } | null; onSent: () => void; onChanged: () => void }) {
+function Composer({ scope, conversation, autoTakeover, inserted, onSent, onChanged }: { scope: DisplayScope; conversation: Conversation; autoTakeover: boolean; inserted: { text: string; n: number } | null; onSent: () => void; onChanged: () => void }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -218,6 +253,12 @@ function Composer({ scope, conversation, inserted, onSent, onChanged }: { scope:
     if (!frozen.trim() || busy) return;
     setBusy(true); setError(null); setAttempt(null);
     try {
+      // Replying by hand pauses FavCRM's AI first. If that fails nothing is prepared.
+      if (autoTakeover && !conversation.handoffAt) {
+        try { await serviceCall(scope, "whatsapp.handoff.set", { conversation_id: conversation.conversationId }); }
+        catch (e) { setError(`Nothing was prepared: FavCRM's AI could not be paused. ${errorText(e, "The takeover was refused.")}`); onChanged(); return; }
+        onChanged();
+      }
       const prepared = parsePrepared(await serviceCall(scope, "whatsapp.reply.prepare", { conversation_id: conversation.conversationId, text: frozen }));
       await approve({ text: frozen, effectId: prepared.effect_id });
     } catch (e) {

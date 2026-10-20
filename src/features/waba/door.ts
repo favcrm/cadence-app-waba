@@ -11,7 +11,7 @@ export interface ConversationRow {
   lastMessage: { direction: string | null; body: string | null; createdAt: string | null } | null;
   unreadCount: number | null; replyMode: string | null; freeformUntil: string | null;
 }
-export interface Conversation extends ConversationRow { status: string | null; lastInboundAt: string | null }
+export interface Conversation extends ConversationRow { status: string | null; lastInboundAt: string | null; handoffAt: string | null }
 export interface Message { id: string; direction: string | null; body: string | null; status: string | null; senderType: string | null; createdAt: string | null; type: string | null }
 export interface Page<T> { rows: T[]; cursor: string | null }
 /** The host's reply states; anything else reads as uncertain. */
@@ -60,7 +60,7 @@ export function parseConversations(v: unknown): Page<ConversationRow> {
 }
 export function parseConversation(v: unknown): Conversation {
   const d = door(v);
-  return { ...row({ ...d, lastMessage: null }), status: str(d.status), lastInboundAt: str(d.lastInboundAt) };
+  return { ...row({ ...d, lastMessage: null }), status: str(d.status), lastInboundAt: str(d.lastInboundAt), handoffAt: str(d.handoffAt) };
 }
 export function parseMessages(v: unknown): Page<Message> {
   const d = door(v);

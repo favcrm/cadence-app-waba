@@ -16,8 +16,8 @@
     {
       "name": "client.js",
       "media_type": "text/javascript",
-      "size": 81637,
-      "sha256": "sha256:1b955df30246a54f726f2a29c2307189db88dfbbfa5b0731ff68f01876e3f4ac"
+      "size": 83552,
+      "sha256": "sha256:565dd8f654f189ea44879bee4b238a64501067024c13a55ccfe745968bd9e11c"
     },
     {
       "name": "waba.css",
@@ -27,7 +27,7 @@
     }
   ],
   "provenance": {
-    "source_digest": "sha256:fa728b07bf0ed3df8258c61652c9275c6f7cb886cf03af1c4d94fbc462634eaf",
+    "source_digest": "sha256:a5f3f2e9d3d8746e18a908a57aa8b8e51b20544360ba92c21437a8ace4fc902e",
     "sdk_digest": "sha256:fd65c974511e63b3996e9fa7e438fb4e39df5f508d11636116ef150fcc123e35",
     "toolchain_digest": "sha256:e21cfc8222db408abe6ba5a482520639d9cf4b96481c19aff4b4246af8a65e42"
   },
@@ -59,13 +59,15 @@
     "chat.whatsapp.open",
     "whatsapp.draft.show",
     "whatsapp.draft.discard",
+    "whatsapp.handoff.set",
     "screen.route.patch",
     "whatsapp.reply.send",
     "whatsapp.template.send",
     "whatsapp.broadcast.test.send",
     "whatsapp.broadcast.send",
     "whatsapp.broadcast.stop",
-    "chat.whatsapp.brief"
+    "chat.whatsapp.brief",
+    "whatsapp.handoff.release"
   ],
   "navigation": {
     "section_query": "waba",

@@ -66,6 +66,13 @@ cadence app catalog approve INSTALL_ID --digest BUNDLE_DIGEST
   never prepares or sends) and Discard; a successful send discards it.
   Members see the draft read-only. "Automatic replies: unavailable".
 
+- **Takeover.** A taken-over conversation shows "Taken over" (FavCRM's AI is
+  paused there). "Take over" pauses it; the app also does so just before your
+  first reply on a conversation that is not taken over, and prepares nothing
+  if that fails. "Hand back to AI" opens a host card; confirming lets FavCRM's
+  AI reply automatically again, and the host refuses it, with its reason, if
+  the takeover changed meanwhile. Members see the banner only.
+
 Members see every page read-only: the host grants them the reads only,
 so the composer, the connect action and every draft, test, send and
 stop control are not shown.
