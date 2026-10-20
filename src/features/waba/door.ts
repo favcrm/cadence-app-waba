@@ -113,6 +113,10 @@ export function declinedReason(error: unknown): { cancelled: boolean; code: stri
 const REFUSALS: Record<string, string> = {
   test_limit: "Test limit reached: up to 5 test sends per 24 hours.",
   invalid_request: "The host refused this request as invalid. Check the fields and try again.",
+  facts_changed: "The takeover changed since this card opened. Check the conversation before trying again.",
+  favcrm_unavailable: "FavCRM is not answering right now. Try again in a moment.",
+  favcrm_not_bound: "This workspace is not connected to FavCRM. Connect it, then try again.",
+  conversation_not_found: "FavCRM could not find this conversation. Refresh the Inbox.",
 };
 export function errorText(error: unknown, fallback: string): string {
   const code = error instanceof ApiError ? (error as ApiError & { code?: unknown }).code : undefined;
