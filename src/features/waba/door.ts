@@ -109,7 +109,14 @@ export function declinedReason(error: unknown): { cancelled: boolean; code: stri
   const api = error instanceof ApiError ? error : null;
   return { cancelled: !api || api.code === "cancelled", code: api?.code ?? null, text: api?.message || null };
 }
+/** Typed host refusals (`refusal.code`) with a clear sentence; any other code keeps the host message. */
+const REFUSALS: Record<string, string> = {
+  test_limit: "Test limit reached: up to 5 test sends per 24 hours.",
+  invalid_request: "The host refused this request as invalid. Check the fields and try again.",
+};
 export function errorText(error: unknown, fallback: string): string {
+  const code = error instanceof ApiError ? (error as ApiError & { code?: unknown }).code : undefined;
+  if (typeof code === "string" && Object.hasOwn(REFUSALS, code)) return REFUSALS[code];
   if (error instanceof ApiError && error.message) return error.message;
   if (error instanceof Error && error.message) return error.message;
   return fallback;
