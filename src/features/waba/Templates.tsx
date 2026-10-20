@@ -1,5 +1,5 @@
 import { Button,Detail,EmptyState,ErrorNotice,Field,Loading,Notice } from "@cadence/screen-ui";
-import { useCallback,useEffect,useState } from "react";
+import { useCallback,useEffect,useRef,useState } from "react";
 import { patchRoute } from "../../bridge/route";
 import { routable,useOnPush,type DisplayScope } from "../../bridge/scope";
 import { serviceCall,serviceSlot } from "../../bridge/services";
@@ -102,6 +102,18 @@ function UseInConversation({ scope, template, recipient, onRecipient }: { scope:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState<Attempt | null>(null);
+  // The revision and status this send was prepared against; pushes refresh `template` under it.
+  const prepared = useRef({ revision: template.revision, status: template.status });
+  // The host reports a changed template as a generic refusal, so the app
+  // re-reads the template and compares it with what the send was prepared on.
+  async function changedNote(): Promise<string | null> {
+    try {
+      const now = parseTemplate(await serviceCall(scope, "whatsapp.template.show", { template_id: template.templateId }));
+      if (now.revision !== prepared.current.revision || now.status !== prepared.current.status)
+        return `the template changed since this send was prepared (now ${statusLabel(now.status)}, revised ${when(now.revision)}). Prepare it again.`;
+    } catch { /* keep the host's own reason */ }
+    return null;
+  }
   if (!recipient) return <ConversationPicker scope={scope} onPick={onRecipient} />;
   const to = recipient;
   const invalid = indexes.filter(n => !valueOk(values[n] ?? ""));
@@ -117,8 +129,8 @@ function UseInConversation({ scope, template, recipient, onRecipient }: { scope:
     try {
       const status = parseReplyStatus(await serviceCall(scope, "whatsapp.template.status", { effect_id: frozen.effectId }));
       const why = refusal === undefined ? null : declinedReason(refusal);
-      // A host refusal of a still-prepared send is a changed template or variables, never a cancel.
-      setAttempt(why && status.state === "prepared" ? { ...frozen, state: "cancelled", reason: why.cancelled ? null : why.code === "conflict" ? "the template or its variables changed since this send was prepared. Prepare it again." : why.text } : { ...frozen, state: "status", status });
+      const reason = why && status.state === "prepared" && !why.cancelled ? await changedNote() ?? why.text : null;
+      setAttempt(why && status.state === "prepared" ? { ...frozen, state: "cancelled", reason } : { ...frozen, state: "status", status });
     } catch { setAttempt({ ...frozen, state: "uncertain" }); }
   }
   async function send() {
@@ -126,8 +138,9 @@ function UseInConversation({ scope, template, recipient, onRecipient }: { scope:
     // Exactly the body indexes, byte for byte, in both the prepare and the SLOT.
     const variables = Object.fromEntries(indexes.map(n => [String(n), values[n]]));
     setBusy(true); setError(null); setAttempt(null);
+    prepared.current = { revision: template.revision, status: template.status };
     try { await approve({ effectId: parsePrepared(await serviceCall(scope, "whatsapp.template.prepare", args(variables)), "wat_").effect_id, variables }); }
-    catch (e) { setError(errorText(e, "The template could not be prepared. Nothing was sent.")); }
+    catch (e) { const note = await changedNote(); setError(note ? `Not sent: ${note}` : errorText(e, "The template could not be prepared. Nothing was sent.")); }
     finally { setBusy(false); }
   }
   const locked = !!attempt && !["sent", "failed", "refused", "cancelled"].includes(attempt.state);
