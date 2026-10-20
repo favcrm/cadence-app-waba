@@ -2,7 +2,7 @@
 app: waba
 title: WhatsApp Business
 version: '0.1.0'
-summary: Connect a WhatsApp Business number through FavCRM, read its inbox and send operator-approved replies. The app holds no credentials.
+summary: Connect WhatsApp Business through FavCRM for its inbox, operator-approved replies, templates and broadcasts. The app holds no credentials.
 needs:
   connections: []
   requires:
@@ -11,9 +11,9 @@ needs:
 
 # WhatsApp Business
 
-This bundle carries the app's own Inbox and Connection screens under
-`screens/waba/`. They call the host's WhatsApp door (`whatsapp.*`
-screen operations, cadence CAD-1562), which reaches FavCRM through
+This bundle carries the app's own Inbox, Templates, Broadcasts and
+Connection screens under `screens/waba/`. They call the host's WhatsApp
+door (`whatsapp.*` screen operations, cadence CAD-1562 and CAD-1590), which reaches FavCRM through
 AgenticOS. FavCRM owns the connection, Meta credentials, webhook,
 messages and send policy. Neither this bundle nor the browser ever
 holds a credential or a company id.
@@ -44,9 +44,22 @@ cadence app catalog approve INSTALL_ID --digest BUNDLE_DIGEST
   through the host-drawn approval card over that exact text. An
   `uncertain` reply is never resent; its recorded status can be read.
   When the 24-hour window is closed, free text cannot be sent.
+- **Templates.** The templates FavCRM holds, with status, revision and
+  variables. "Use in conversation" picks a conversation (kept while you
+  move between pages) and sends an approved template through the
+  host-drawn approval card, also when the 24-hour window is closed.
+- **Broadcasts.** Draft (template, variables, and a segment or up to
+  1000 accounts), estimate (eligible and excluded), a test send to one
+  typed number (at most 5 per broadcast per day), then a review that
+  FavCRM freezes and the operator approves in the host card to send now
+  or schedule (5 minutes to 7 days ahead). Results come per recipient.
+  Stop cancels unsent recipients only and is final; clone to send
+  again. "Accepted" or "scheduled" is never a delivery. Meta charges the
+  WhatsApp Business Account per delivered marketing message.
 
-Members see the inbox read-only: the host grants them the reads only,
-so the composer and the connect action are not shown.
+Members see every page read-only: the host grants them the reads only,
+so the composer, the connect action and every draft, test, send and
+stop control are not shown.
 
 ## Reply draft workflow
 

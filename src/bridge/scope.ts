@@ -1,9 +1,9 @@
 import { ApiError } from "@cadence/screen-ui";
 import { useSyncExternalStore } from "react";
 import { exact } from "./channel";
-import { OPERATIONS } from "./services";
+import { OPERATIONS,type Section } from "./services";
 export interface DisplayScope { installId: string; contextId: string }
-export interface Route { section: "connection" | "inbox"; view: "list" | "new"; record_id: string | null; segment_id: string | null }
+export interface Route { section: Section; view: "list" | "new"; record_id: string | null; segment_id: string | null }
 export interface ScopeSnapshot { scope: DisplayScope; digest: string; actions: string[]; route: Route }
 let snapshot: ScopeSnapshot | null = null;
 let error: string | null = null;
@@ -19,7 +19,7 @@ export const routeId = (v: unknown): v is string => typeof v === "string" && /^[
 const digest = (v: unknown) => typeof v === "string" && /^sha256:[a-f0-9]{64}$/.test(v);
 function invalid(): never { throw new ApiError("Invalid WhatsApp scope projection", 502); }
 export function parseRoute(v: unknown): Route {
-  if (!obj(v) || !exact(v, ["section", "view", "record_id", "segment_id"]) || !["connection", "inbox"].includes(v.section as string) || !["list", "new"].includes(v.view as string) || (v.record_id !== null && !routeId(v.record_id)) || (v.segment_id !== null && !routeId(v.segment_id))) invalid();
+  if (!obj(v) || !exact(v, ["section", "view", "record_id", "segment_id"]) || !["connection", "inbox", "templates", "broadcasts"].includes(v.section as string) || !["list", "new"].includes(v.view as string) || (v.record_id !== null && !routeId(v.record_id)) || (v.segment_id !== null && !routeId(v.segment_id))) invalid();
   return v as unknown as Route;
 }
 export function acceptPush(p: Record<string, unknown>): void {

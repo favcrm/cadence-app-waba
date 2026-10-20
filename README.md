@@ -1,7 +1,7 @@
 # Cadence app: WhatsApp Business (WABA)
 
 An installable Cadence app that ships its own screens. Step 1 (WABA-1) ships **Inbox** and
-**Connection**; Broadcasts, Templates and the AI agent come in later steps.
+**Connection**; step 2 (WABA-2) adds **Templates** and **Broadcasts**; the AI agent comes later.
 It follows the same layout as `favcrm/cadence-app-crm`: an `app/` bundle with `screens/waba/`,
 built on the host's pinned screen-ui SDK.
 

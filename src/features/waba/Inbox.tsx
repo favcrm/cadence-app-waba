@@ -3,12 +3,13 @@ import { useCallback,useEffect,useState } from "react";
 import { patchRoute } from "../../bridge/route";
 import { routeId,type DisplayScope } from "../../bridge/scope";
 import { serviceCall,serviceSlot } from "../../bridge/services";
+import type { Recipient } from "./Templates";
 import { errorText,parseConversation,parseConversations,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Message,type ReplyState,type ReplyStatus } from "./door";
 
 const PAGE = 25;
 type Load<T> = { state: "loading" } | { state: "ok"; value: T } | { state: "failed"; text: string };
 
-export default function Inbox({ scope, canReply, routeId: routed }: { scope: DisplayScope; canReply: boolean; routeId: string | null }) {
+export default function Inbox({ scope, canReply, canTemplate, routeId: routed, onRecipient }: { scope: DisplayScope; canReply: boolean; canTemplate: boolean; routeId: string | null; onRecipient: (r: Recipient) => void }) {
   const [rows, setRows] = useState<ConversationRow[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [list, setList] = useState<"loading" | "ok" | "more" | string>("loading");
@@ -52,13 +53,13 @@ export default function Inbox({ scope, canReply, routeId: routed }: { scope: Dis
       {cursor && !failed && <Button size="sm" onClick={() => { void page(cursor); }} loading={list === "more"}>Load more</Button>}
     </div>
     <div className="waba-thread">
-      {selected ? <Thread key={selected} scope={scope} id={selected} canReply={canReply} onBack={() => select(null)} />
+      {selected ? <Thread key={selected} scope={scope} id={selected} canReply={canReply} canTemplate={canTemplate} onRecipient={onRecipient} onBack={() => select(null)} />
         : <EmptyState title="Select a conversation" name="thread">Messages and the reply composer appear here.</EmptyState>}
     </div>
   </section>;
 }
 
-function Thread({ scope, id, canReply, onBack }: { scope: DisplayScope; id: string; canReply: boolean; onBack: () => void }) {
+function Thread({ scope, id, canReply, canTemplate, onRecipient, onBack }: { scope: DisplayScope; id: string; canReply: boolean; canTemplate: boolean; onRecipient: (r: Recipient) => void; onBack: () => void }) {
   const [conversation, setConversation] = useState<Load<Conversation>>({ state: "loading" });
   const [messages, setMessages] = useState<Load<{ rows: Message[]; cursor: string | null }>>({ state: "loading" });
   const show = useCallback(async () => {
@@ -96,6 +97,7 @@ function Thread({ scope, id, canReply, onBack }: { scope: DisplayScope; id: stri
       </>}
     {c && (canReply ? <Composer scope={scope} conversation={c} onChanged={reload} />
       : <Notice state="read-only">You can read this inbox. Only the workspace operator can reply.</Notice>)}
+    {c && canTemplate && <Button size="sm" onClick={() => { onRecipient(c); void patchRoute({ section: "templates", view: "list", record_id: null }).catch(() => undefined); }}>Send an approved template…</Button>}
   </article>;
 }
 
@@ -151,7 +153,7 @@ function Composer({ scope, conversation, onChanged }: { scope: DisplayScope; con
   // reply is never sent twice. The outcome stays visible if the window closes.
   const locked = !!attempt && !["sent", "failed", "refused", "cancelled"].includes(attempt.state);
   const outcome = attempt && <Outcome attempt={attempt} onCheck={() => { void check(attempt); }} onApproveAgain={() => { void approve(attempt); }} onDismiss={() => setAttempt(null)} />;
-  if (!open) return <div className="waba-composer">{outcome}<Notice state="window-closed">The 24-hour reply window is closed, so free text can&apos;t be sent to this customer. Approved templates arrive in a later step.</Notice></div>;
+  if (!open) return <div className="waba-composer">{outcome}<Notice state="window-closed">The 24-hour reply window is closed, so free text can&apos;t be sent to this customer. An approved template can still be sent.</Notice></div>;
   return <form className="waba-composer" onSubmit={e => { e.preventDefault(); void send(); }}>
     {outcome}
     {error && <ErrorNotice bare>{error}</ErrorNotice>}
