@@ -11,7 +11,7 @@ export interface ConversationRow {
   lastMessage: { direction: string | null; body: string | null; createdAt: string | null } | null;
   unreadCount: number | null; replyMode: string | null; freeformUntil: string | null;
 }
-export interface Conversation extends ConversationRow { status: string | null; lastInboundAt: string | null }
+export interface Conversation extends ConversationRow { status: string | null; lastInboundAt: string | null; handoffAt: string | null }
 export interface Message { id: string; direction: string | null; body: string | null; status: string | null; senderType: string | null; createdAt: string | null; type: string | null }
 export interface Page<T> { rows: T[]; cursor: string | null }
 /** The host's reply states; anything else reads as uncertain. */
@@ -60,7 +60,7 @@ export function parseConversations(v: unknown): Page<ConversationRow> {
 }
 export function parseConversation(v: unknown): Conversation {
   const d = door(v);
-  return { ...row({ ...d, lastMessage: null }), status: str(d.status), lastInboundAt: str(d.lastInboundAt) };
+  return { ...row({ ...d, lastMessage: null }), status: str(d.status), lastInboundAt: str(d.lastInboundAt), handoffAt: str(d.handoffAt) };
 }
 export function parseMessages(v: unknown): Page<Message> {
   const d = door(v);
@@ -113,6 +113,10 @@ export function declinedReason(error: unknown): { cancelled: boolean; code: stri
 const REFUSALS: Record<string, string> = {
   test_limit: "Test limit reached: up to 5 test sends per 24 hours.",
   invalid_request: "The host refused this request as invalid. Check the fields and try again.",
+  facts_changed: "The takeover changed since this card opened. Check the conversation before trying again.",
+  favcrm_unavailable: "FavCRM is not answering right now. Try again in a moment.",
+  favcrm_not_bound: "This workspace is not connected to FavCRM. Connect it, then try again.",
+  conversation_not_found: "FavCRM could not find this conversation. Refresh the Inbox.",
 };
 export function errorText(error: unknown, fallback: string): string {
   const code = error instanceof ApiError ? (error as ApiError & { code?: unknown }).code : undefined;

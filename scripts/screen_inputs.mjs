@@ -48,7 +48,7 @@ export function operationInventory() {
   const service=readFileSync(safePath(root,'src/bridge/services.ts'),'utf8');
   const table=service.slice(service.indexOf('export const CALL_FIELDS'),service.indexOf('export const OPERATIONS'));
   const operations=[...table.matchAll(/"([a-z][a-z._-]+)":/g)].map(m=>m[1]);
-  if (operations.length !== 28 || new Set(operations).size !== operations.length) throw new Error('Closed operation inventory must contain 28 distinct operations');
+  if (operations.length !== 30 || new Set(operations).size !== operations.length) throw new Error('Closed operation inventory must contain 30 distinct operations');
   return operations;
 }
 export function inputs(args) {
