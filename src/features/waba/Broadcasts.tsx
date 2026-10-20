@@ -1,9 +1,9 @@
 import { Button,Detail,EmptyState,ErrorNotice,Field,Loading,Notice,Select } from "@cadence/screen-ui";
-import { useCallback,useEffect,useState,type ReactNode } from "react";
+import { useCallback,useEffect,useRef,useState,type ReactNode } from "react";
 import { patchRoute } from "../../bridge/route";
-import { routable,type DisplayScope } from "../../bridge/scope";
+import { routable,useOnPush,type DisplayScope } from "../../bridge/scope";
 import { serviceCall,serviceSlot,type Audience } from "../../bridge/services";
-import { errorText,when } from "./door";
+import { declinedReason,errorText,when } from "./door";
 import { bodyIndexes,excluded,parseBroadcast,parseBroadcasts,parseDraft,parseEstimate,parsePrepared,parseResults,parseStop,parseTemplates,sendOutcome,testLimit,valueOk,type Broadcast,type BroadcastRow,type Estimate,type Result,type SendState,type Template } from "./door2";
 import { statusLabel } from "./Templates";
 
@@ -24,15 +24,19 @@ export default function Broadcasts({ scope, rights, routeId: routed, creating }:
   const [list, setList] = useState<"loading" | "ok" | "more" | string>("loading");
   const [local, setLocal] = useState<string | null>(null);
   const selected = routed ?? local;
-  const page = useCallback(async (after: string | null) => {
-    setList(after ? "more" : "loading");
+  // `quiet` is a host-push refresh: no loading state, loaded pages kept, errors
+  // leave what is shown in place.
+  const page = useCallback(async (after: string | null, quiet = false) => {
+    if (!quiet) setList(after ? "more" : "loading");
     try {
       const got = parseBroadcasts(await serviceCall(scope, "whatsapp.broadcasts.list", { limit: 50, ...(after ? { cursor: after } : {}) }));
-      setRows(r => after ? [...r, ...got.rows.filter(n => !r.some(o => o.broadcastId === n.broadcastId))] : got.rows);
-      setCursor(got.cursor); setList("ok");
-    } catch (e) { setList(errorText(e, "The broadcast list could not be read.")); }
+      setRows(r => after ? [...r, ...got.rows.filter(n => !r.some(o => o.broadcastId === n.broadcastId))]
+        : quiet ? [...got.rows, ...r.filter(o => !got.rows.some(n => n.broadcastId === o.broadcastId))] : got.rows);
+      setCursor(c => quiet && c ? c : got.cursor); setList(l => l === "more" ? l : "ok");
+    } catch (e) { if (!quiet) setList(errorText(e, "The broadcast list could not be read.")); }
   }, [scope]);
   useEffect(() => { void page(null); }, [page]);
+  useOnPush(() => page(null, true));
   function select(id: string | null) {
     if (id === null || routable(id)) { setLocal(null); go({ view: "list", record_id: id }); }
     else { setLocal(id); go({ view: "list", record_id: null }); }
@@ -72,11 +76,12 @@ function BroadcastDetail({ scope, id, rights, onSaved, onBack }: { scope: Displa
   const [editing, setEditing] = useState<{ initial: DraftInput; broadcastId?: string } | null>(null);
   // A send or stop changes the status that shows its panel, so its outcome lives here.
   const [outcome, setOutcome] = useState<ReactNode>(null);
-  const show = useCallback(async () => {
+  const show = useCallback(async (quiet = false) => {
     try { setRead({ state: "ok", value: parseBroadcast(await serviceCall(scope, "whatsapp.broadcast.show", { broadcast_id: id })) }); }
-    catch (e) { setRead({ state: "failed", text: errorText(e, "The broadcast could not be read.") }); }
+    catch (e) { setRead(r => quiet && r.state === "ok" ? r : { state: "failed", text: errorText(e, "The broadcast could not be read.") }); }
   }, [scope, id]);
   useEffect(() => { void show(); }, [show]);
+  useOnPush(() => show(true));
   const b = read.state === "ok" ? read.value : null;
   const input = (b: Broadcast, clone: boolean): DraftInput => ({ name: clone ? `${b.name} (copy)`.slice(0, 200) : b.name, templateId: b.template?.templateId ?? "", parameters: b.bodyParameters,
     source: b.audience.source === "individual" ? "individual" : "segment", segmentId: b.audience.segmentId ?? "", accounts: b.audience.accountIds.join("\n") });
@@ -187,7 +192,7 @@ function EstimatePanel({ scope, id }: { scope: DisplayScope; id: string }) {
   </section>;
 }
 
-type Effect = { state: "approving" | "cancelled" } | { state: SendState; code: string | null };
+type Effect = { state: "approving" } | { state: "cancelled"; reason?: string | null } | { state: SendState; code: string | null };
 const done = (e: Effect | null) => !!e && ["accepted", "sent", "failed", "refused", "cancelled"].includes(e.state);
 
 function TestPanel({ scope, id }: { scope: DisplayScope; id: string }) {
@@ -199,7 +204,7 @@ function TestPanel({ scope, id }: { scope: DisplayScope; id: string }) {
   async function approve(effectId: string, masked: string | null) {
     setEffect({ state: "approving", masked, effectId });
     try { setEffect({ ...sendOutcome(await serviceSlot(scope, "whatsapp.broadcast.test.send", { effect_id: effectId })), masked, effectId }); }
-    catch { setEffect({ state: "cancelled", masked, effectId }); }
+    catch (e) { setEffect({ state: "cancelled", reason: hostReason(e), masked, effectId }); }
   }
   async function send() {
     if (!valid || busy) return;
@@ -220,6 +225,8 @@ function TestPanel({ scope, id }: { scope: DisplayScope; id: string }) {
     <Button type="submit" loading={busy} disabled={!valid || locked}>Send test…</Button>
   </form>;
 }
+/** The host's own words for a refused card; nothing for the person's cancel. */
+const hostReason = (e: unknown) => { const d = declinedReason(e); return d.cancelled ? null : d.text; };
 const LIMIT = "Test limit reached: at most 5 test sends per broadcast in 24 hours. Try again later.";
 
 function SendPanel({ scope, id, onOutcome, onChanged }: { scope: DisplayScope; id: string; onOutcome: (n: ReactNode) => void; onChanged: () => void }) {
@@ -238,7 +245,7 @@ function SendPanel({ scope, id, onOutcome, onChanged }: { scope: DisplayScope; i
       const out = sendOutcome(await serviceSlot(scope, "whatsapp.broadcast.send", { effect_id: effectId }));
       setEffect({ ...out, effectId });
       if (out.state !== "pending") onOutcome(<EffectNotice effect={out} what="broadcast" onApproveAgain={() => undefined} />);
-    } catch { setEffect({ state: "cancelled", effectId }); }
+    } catch (e) { setEffect({ state: "cancelled", reason: hostReason(e), effectId }); }
     onChanged();
   }
   async function send() {
@@ -267,7 +274,7 @@ function EffectNotice({ effect, what, onApproveAgain }: { effect: Effect & { mas
   const code = "code" in effect && effect.code ? ` (${effect.code})` : "";
   switch (effect.state) {
     case "approving": return <Notice state="approving">Waiting for your approval in the Cadence card…</Notice>;
-    case "cancelled": return <Notice state="cancelled">Not approved: the card was cancelled or the host refused it. {what === "test" ? "No test was sent." : "Refresh to read the broadcast's status."}</Notice>;
+    case "cancelled": return <Notice state="cancelled">{"reason" in effect && effect.reason ? `Not approved: ${effect.reason}` : "Not approved: the card was cancelled or the host refused it."} {what === "test" ? "No test was sent." : "Refresh to read the broadcast's status."}</Notice>;
     case "accepted": return what === "test"
       ? <Notice state="accepted">Queued: FavCRM accepted the test{effect.masked ? ` for ${effect.masked}` : ""}. That is not a delivery; check the phone.</Notice>
       : <Notice state="accepted">Scheduled: FavCRM accepted the broadcast. Accepted is not delivered; per-recipient results appear below as WhatsApp reports them.</Notice>;
@@ -305,14 +312,20 @@ function ResultsPanel({ scope, id }: { scope: DisplayScope; id: string }) {
   const [total, setTotal] = useState<number | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
   const [state, setState] = useState<"loading" | "ok" | "more" | string>("loading");
-  const page = useCallback(async (after: string | null) => {
-    setState(after ? "more" : "loading");
+  // Results carry no id to merge on, so a host-push refresh skips a list the
+  // person has paged past its first page (Refresh reads it again).
+  const deep = useRef(false);
+  const page = useCallback(async (after: string | null, quiet = false) => {
+    if (quiet && deep.current) return;
+    if (!quiet) setState(after ? "more" : "loading");
     try {
       const got = parseResults(await serviceCall(scope, "whatsapp.broadcast.results", { broadcast_id: id, limit: 50, ...(after ? { cursor: after } : {}) }));
+      deep.current = !!after;
       setRows(r => after ? [...r, ...got.rows] : got.rows); setTotal(got.total); setCursor(got.cursor); setState("ok");
-    } catch (e) { setState(errorText(e, "Results could not be read.")); }
+    } catch (e) { if (!quiet) setState(errorText(e, "Results could not be read.")); }
   }, [scope, id]);
   useEffect(() => { void page(null); }, [page]);
+  useOnPush(() => page(null, true));
   const failed = !["loading", "ok", "more"].includes(state);
   return <section className="waba-composer" aria-label="Results">
     <div className="waba-head"><h3>Results{total !== null ? ` (${total})` : ""}</h3><Button size="sm" onClick={() => { void page(null); }} loading={state === "loading"}>Refresh</Button></div>

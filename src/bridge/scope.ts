@@ -1,5 +1,5 @@
 import { ApiError } from "@cadence/screen-ui";
-import { useSyncExternalStore } from "react";
+import { useEffect,useRef,useSyncExternalStore } from "react";
 import { exact } from "./channel";
 import { OPERATIONS,type Section } from "./services";
 export interface DisplayScope { installId: string; contextId: string }
@@ -12,6 +12,21 @@ const notify = () => listeners.forEach(f => f());
 export const subscribeScope = (f: () => void) => { listeners.add(f); return () => { listeners.delete(f); }; };
 export const getScope = () => snapshot;
 export function useScope() { return useSyncExternalStore(subscribeScope, getScope); }
+// Counts accepted host pushes. A page re-reads in the background on each one.
+let pushes = 0;
+const getPushes = () => pushes;
+/** Runs `refresh` after every accepted host push (never on mount), one at a
+ *  time: a push that lands while a refresh is in flight is skipped. */
+export function useOnPush(refresh: () => Promise<unknown>): void {
+  const count = useSyncExternalStore(subscribeScope, getPushes);
+  const seen = useRef(count), latest = useRef(refresh), running = useRef(false);
+  latest.current = refresh;
+  useEffect(() => {
+    if (count === seen.current || running.current) return;
+    seen.current = count; running.current = true;
+    void latest.current().finally(() => { running.current = false; });
+  }, [count]);
+}
 export function scopeError() { return error; }
 export function clearScope(reason: string): void { snapshot = null; error = reason; notify(); }
 const obj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
@@ -28,11 +43,10 @@ export function parseRoute(v: unknown): Route {
 export function acceptPush(p: Record<string, unknown>): void {
   if (!exact(p, ["v", "op", "install_id", "context_id", "digest", "tag", "installation", "contexts", "runs", "outbox", "publish_intents", "sources", "defaults", "readiness", "actions", "now", "resume", "route", "read_observations", "presentation_locale"]) || p.tag !== "waba" || !routeId(p.install_id) || !(p.context_id === "" || routeId(p.context_id)) || !digest(p.digest) || !Array.isArray(p.actions) || !p.actions.every(a => typeof a === "string" && OPERATIONS.includes(a)) || new Set(p.actions).size !== p.actions.length) invalid();
   if (!obj(p.installation) || !exact(p.installation, ["install_id", "name", "title", "version", "digest", "summary"]) || p.installation.install_id !== p.install_id || p.installation.digest !== p.digest || p.installation.name !== "waba" || !["title", "version", "summary"].every(k => typeof (p.installation as Record<string, unknown>)[k] === "string") || !Array.isArray(p.contexts) || !p.contexts.every(c => obj(c) && exact(c, ["id", "label"]) && routeId(c.id) && typeof c.label === "string")) invalid();
-  // The host replays only CRM record reads; this screen keeps no read cache.
   if (p.read_observations !== undefined && (!Array.isArray(p.read_observations) || p.read_observations.length > 16)) invalid();
   if (snapshot && (snapshot.scope.installId !== p.install_id || snapshot.scope.contextId !== p.context_id || snapshot.digest !== p.digest)) invalid();
   snapshot = { scope: { installId: p.install_id as string, contextId: p.context_id as string }, digest: p.digest as string, actions: p.actions as string[], route: parseRoute(p.route) };
-  error = null; notify();
+  pushes++; error = null; notify();
 }
 export function assertCurrentScope(scope: DisplayScope): void {
   if (!snapshot || scope.installId !== snapshot.scope.installId || scope.contextId !== snapshot.scope.contextId) throw new ApiError("WhatsApp scope is absent or retired", 403);

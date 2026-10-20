@@ -1,6 +1,6 @@
 import { Button,Detail,ErrorNotice,Loading,Notice } from "@cadence/screen-ui";
 import { useCallback,useEffect,useState } from "react";
-import type { DisplayScope } from "../../bridge/scope";
+import { useOnPush,type DisplayScope } from "../../bridge/scope";
 import { serviceCall } from "../../bridge/services";
 import { errorText,parseConnect,parseStatus,when,type ConnectSession,type Status } from "./door";
 
@@ -16,18 +16,20 @@ export default function Connection({ scope, canConnect }: { scope: DisplayScope;
   // The link lives in memory only; it is never stored or logged.
   const [signup, setSignup] = useState<Signup>({ phase: "idle" });
   // `afterSignup`: the operator says signup finished or was closed; the read decides.
-  const refresh = useCallback(async (afterSignup = false) => {
-    setRead({ state: "reading" });
+  // `quiet` is a host-push refresh: no loading state, and a failed read keeps the last status.
+  const refresh = useCallback(async (afterSignup = false, quiet = false) => {
+    if (!quiet) setRead({ state: "reading" });
     try {
       const status = parseStatus(await serviceCall(scope, "whatsapp.status", {}));
       setRead({ state: "ok", status });
       if (afterSignup) setSignup(s => status.connected ? { phase: "idle" } : { phase: "incomplete", link: (s.phase === "open" || s.phase === "manual") && !expired(s.link) ? s.link : null });
     } catch (e) {
       // A failed lookup is its own state, never a fabricated "not connected".
-      setRead({ state: "failed", text: errorText(e, "The status lookup failed.") });
+      setRead(r => quiet && r.state === "ok" ? r : { state: "failed", text: errorText(e, "The status lookup failed.") });
     }
   }, [scope]);
   useEffect(() => { void refresh(); }, [refresh]);
+  useOnPush(() => refresh(false, true));
   // A link that outlives its expiry is refused here, never reused.
   useEffect(() => {
     if (signup.phase !== "open" && signup.phase !== "manual" || !signup.link.expiresAt) return;
