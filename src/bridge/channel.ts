@@ -1,7 +1,7 @@
 import { ApiError } from "@cadence/screen-ui";
 import { acceptPush,clearScope } from "./scope";
 
-type Pending = { resolve: (v: unknown) => void; reject: (e: unknown) => void; timer: ReturnType<typeof setTimeout>; kind: "call" | "slot" };
+type Pending = { resolve: (v: unknown) => void; reject: (e: unknown) => void; timer: ReturnType<typeof setTimeout> | undefined; kind: "call" | "slot" };
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 export function exact(v: Record<string, unknown>, keys: readonly string[]): boolean { return Object.keys(v).every(k => keys.includes(k)); }
 const bytes = (v: unknown) => new TextEncoder().encode(JSON.stringify(v)).length;
@@ -43,8 +43,10 @@ class Channel {
     if (this.pending.size >= 8) return Promise.reject(new ApiError("WhatsApp bridge is busy; wait for the current request", 429));
     const id = `waba-${++this.serial}`;
     return new Promise((resolve, reject) => {
-      // No automatic retries: a timed-out send may have executed.
-      const timer = setTimeout(() => this.retire(new ApiError("WhatsApp request did not answer. Read its status before doing anything else.", TIMEOUT_STATUS)), 65000);
+      // No automatic retries: a timed-out send may have executed. A slot waits
+      // for a person's tap, so only the host's own card expiry ends it; a timer
+      // here would drop the effect id before a late tap is answered.
+      const timer = kind === "slot" ? undefined : setTimeout(() => this.retire(new ApiError("WhatsApp request did not answer. Read its status before doing anything else.", TIMEOUT_STATUS)), 65000);
       this.pending.set(id, { resolve, reject, timer, kind });
       this.port!.postMessage({ v: 2, op: kind, id, verb, args, ...(kind === "slot" ? { anchor: "footer" } : {}) });
     });

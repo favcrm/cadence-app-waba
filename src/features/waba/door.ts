@@ -94,6 +94,12 @@ export function when(v: string | null): string {
   const t = Date.parse(v);
   return Number.isNaN(t) ? v : new Date(t).toLocaleString();
 }
+/** Why a confirm card ended without a send. The host names its own refusals
+ *  (`conflict`, `expired`, …); only `cancelled` is the person's own choice. */
+export function declinedReason(error: unknown): { cancelled: boolean; code: string | null; text: string | null } {
+  const api = error instanceof ApiError ? error : null;
+  return { cancelled: !api || api.code === "cancelled", code: api?.code ?? null, text: api?.message || null };
+}
 export function errorText(error: unknown, fallback: string): string {
   if (error instanceof ApiError && error.message) return error.message;
   if (error instanceof Error && error.message) return error.message;

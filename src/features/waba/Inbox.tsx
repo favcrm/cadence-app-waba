@@ -1,10 +1,10 @@
 import { Button,EmptyState,ErrorNotice,Field,Loading,Notice } from "@cadence/screen-ui";
 import { useCallback,useEffect,useState } from "react";
 import { patchRoute } from "../../bridge/route";
-import { routable,type DisplayScope } from "../../bridge/scope";
+import { routable,useOnPush,type DisplayScope } from "../../bridge/scope";
 import { serviceCall,serviceSlot } from "../../bridge/services";
 import type { Recipient } from "./Templates";
-import { errorText,parseConversation,parseConversations,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Message,type ReplyState,type ReplyStatus } from "./door";
+import { declinedReason,errorText,parseConversation,parseConversations,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Message,type ReplyState,type ReplyStatus } from "./door";
 
 const PAGE = 25;
 type Load<T> = { state: "loading" } | { state: "ok"; value: T } | { state: "failed"; text: string };
@@ -17,15 +17,19 @@ export default function Inbox({ scope, canReply, canTemplate, routeId: routed, o
   // Ids outside the host route grammar stay a local selection.
   const [local, setLocal] = useState<string | null>(null);
   const selected = routed ?? local;
-  const page = useCallback(async (after: string | null) => {
-    setList(after ? "more" : "loading");
+  // `quiet` is a host-push refresh: no loading state, loaded pages kept, errors
+  // leave what is shown in place.
+  const page = useCallback(async (after: string | null, quiet = false) => {
+    if (!quiet) setList(after ? "more" : "loading");
     try {
       const got = parseConversations(await serviceCall(scope, "whatsapp.conversations.list", { limit: PAGE, ...(after ? { cursor: after } : {}) }));
-      setRows(r => after ? [...r, ...got.rows.filter(n => !r.some(o => o.conversationId === n.conversationId))] : got.rows);
-      setCursor(got.cursor); setList("ok");
-    } catch (e) { setList(errorText(e, "The conversation list could not be read.")); }
+      setRows(r => after ? [...r, ...got.rows.filter(n => !r.some(o => o.conversationId === n.conversationId))]
+        : quiet ? [...got.rows, ...r.filter(o => !got.rows.some(n => n.conversationId === o.conversationId))] : got.rows);
+      setCursor(c => quiet && c ? c : got.cursor); setList(l => l === "more" ? l : "ok");
+    } catch (e) { if (!quiet) setList(errorText(e, "The conversation list could not be read.")); }
   }, [scope]);
   useEffect(() => { void page(null); }, [page]);
+  useOnPush(() => page(null, true));
   function select(id: string | null) {
     if (id === null || routable(id)) { setLocal(null); void patchRoute({ section: "inbox", view: "list", record_id: id }).catch(() => undefined); }
     else { setLocal(id); void patchRoute({ section: "inbox", view: "list", record_id: null }).catch(() => undefined); }
@@ -62,18 +66,23 @@ export default function Inbox({ scope, canReply, canTemplate, routeId: routed, o
 function Thread({ scope, id, canReply, canTemplate, onRecipient, onBack }: { scope: DisplayScope; id: string; canReply: boolean; canTemplate: boolean; onRecipient: (r: Recipient) => void; onBack: () => void }) {
   const [conversation, setConversation] = useState<Load<Conversation>>({ state: "loading" });
   const [messages, setMessages] = useState<Load<{ rows: Message[]; cursor: string | null }>>({ state: "loading" });
-  const show = useCallback(async () => {
+  // `quiet` is a host-push refresh: shown data stays on a failed read, and
+  // messages already loaded stay (newer rows win by id).
+  const show = useCallback(async (quiet = false) => {
     try { setConversation({ state: "ok", value: parseConversation(await serviceCall(scope, "whatsapp.conversations.show", { conversation_id: id })) }); }
-    catch (e) { setConversation({ state: "failed", text: errorText(e, "The conversation could not be read.") }); }
+    catch (e) { setConversation(c => quiet && c.state === "ok" ? c : { state: "failed", text: errorText(e, "The conversation could not be read.") }); }
   }, [scope, id]);
-  const read = useCallback(async (after: string | null = null) => {
+  const read = useCallback(async (after: string | null = null, quiet = false) => {
     try {
       const got = parseMessages(await serviceCall(scope, "whatsapp.messages", { conversation_id: id, limit: 50, ...(after ? { cursor: after } : {}) }));
-      setMessages(m => ({ state: "ok", value: { rows: after && m.state === "ok" ? [...m.value.rows, ...got.rows.filter(n => !m.value.rows.some(o => o.id === n.id))] : got.rows, cursor: got.cursor } }));
-    } catch (e) { setMessages({ state: "failed", text: errorText(e, "Messages could not be read.") }); }
+      setMessages(m => m.state === "ok" && (after || quiet)
+        ? { state: "ok", value: { rows: after ? [...m.value.rows, ...got.rows.filter(n => !m.value.rows.some(o => o.id === n.id))] : [...got.rows, ...m.value.rows.filter(o => !got.rows.some(n => n.id === o.id))], cursor: quiet ? m.value.cursor : got.cursor } }
+        : { state: "ok", value: { rows: got.rows, cursor: got.cursor } });
+    } catch (e) { setMessages(m => quiet && m.state === "ok" ? m : { state: "failed", text: errorText(e, "Messages could not be read.") }); }
   }, [scope, id]);
   const reload = useCallback(() => { void show(); void read(); }, [show, read]);
   useEffect(() => { reload(); }, [reload]);
+  useOnPush(() => Promise.all([show(true), read(null, true)]));
   const c = conversation.state === "ok" ? conversation.value : null;
   const ordered = messages.state === "ok" ? [...messages.value.rows].sort((a, b) => (Date.parse(a.createdAt ?? "") || 0) - (Date.parse(b.createdAt ?? "") || 0)) : [];
   return <article className="waba-card waba-conversation" aria-labelledby="waba-thread-title">
@@ -103,7 +112,7 @@ function Thread({ scope, id, canReply, canTemplate, onRecipient, onBack }: { sco
 
 /** One reply = prepare (host mints the effect and digest) → the host-drawn
  *  approval SLOT over exactly the prepared text. Nothing is retried. */
-type Attempt = { text: string; effectId: string } & ({ state: "approving" } | { state: ReplyState } | { state: "checking" } | { state: "status"; status: ReplyStatus } | { state: "cancelled" });
+type Attempt = { text: string; effectId: string } & ({ state: "approving" } | { state: ReplyState } | { state: "checking" } | { state: "status"; status: ReplyStatus } | { state: "cancelled"; reason: string | null });
 
 function Composer({ scope, conversation, onChanged }: { scope: DisplayScope; conversation: Conversation; onChanged: () => void }) {
   const [text, setText] = useState("");
@@ -120,18 +129,19 @@ function Composer({ scope, conversation, onChanged }: { scope: DisplayScope; con
       const state = sendState(done);
       setAttempt({ ...frozen, state });
       if (state === "sent" || state === "uncertain") setText("");
-    } catch {
+    } catch (e) {
       // A refused card may be a cancel or a host refusal: the host record decides.
-      await check(frozen, true);
+      await check(frozen, e);
     }
     onChanged();
   }
-  async function check(frozen: { text: string; effectId: string }, afterRefusal = false) {
+  // `refusal` is what ended the card; with it, a still-prepared effect was not sent.
+  async function check(frozen: { text: string; effectId: string }, refusal?: unknown) {
     setAttempt({ ...frozen, state: "checking" });
     try {
       const status = parseReplyStatus(await serviceCall(scope, "whatsapp.reply.status", { effect_id: frozen.effectId }));
-      const cancelled = afterRefusal && status.state === "prepared";
-      setAttempt(cancelled ? { ...frozen, state: "cancelled" } : { ...frozen, state: "status", status });
+      const cancelled = refusal !== undefined && status.state === "prepared";
+      setAttempt(cancelled ? { ...frozen, state: "cancelled", reason: declinedReason(refusal).cancelled ? null : declinedReason(refusal).text } : { ...frozen, state: "status", status });
       // Anything that may have left the host is never offered for resend.
       if (!cancelled && !["prepared", "failed", "refused"].includes(status.state)) setText("");
     } catch { setAttempt({ ...frozen, state: "uncertain" }); setText(""); }
@@ -172,7 +182,7 @@ function Outcome({ attempt, onCheck, onApproveAgain, onDismiss }: { attempt: Att
     case "sent": return <Notice state="sent">Sent: FavCRM accepted the reply. Delivery shows on the message once WhatsApp reports it. <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></Notice>;
     case "failed": return <ErrorNotice>Failed: FavCRM did not send this reply. Your text is still in the composer. <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></ErrorNotice>;
     case "refused": return <ErrorNotice>Refused: the reply was not sent (for example the window closed or the approval was declined). <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></ErrorNotice>;
-    case "cancelled": return <Notice state="cancelled">Not sent: the approval was cancelled. <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></Notice>;
+    case "cancelled": return <Notice state="cancelled">{attempt.reason ? `Not sent: ${attempt.reason}` : "Not sent: the approval was cancelled."} <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></Notice>;
     case "pending": return <Notice state="pending">Waiting for the owner&apos;s approval in AgenticOS. Nothing has been sent. Once it is approved, confirm the same reply again.{quote}
       <Button size="sm" onClick={onApproveAgain}>Confirm this reply again</Button></Notice>;
     case "status": return <Notice state={`status-${attempt.status.state}`}>Recorded status: <strong>{attempt.status.state}</strong>{attempt.status.door ? ` (door: ${attempt.status.door})` : ""}. Check the messages above; this reply is never resent automatically.{quote}
