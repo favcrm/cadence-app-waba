@@ -17,5 +17,6 @@
       "prompts": ["Is my WhatsApp number connected?", "Explain the webhook status"]
     }
   ],
+  "subjects": [{ "kind": "whatsapp", "label": "Conversation" }],
   "presentation": { "showContext": true }
 }

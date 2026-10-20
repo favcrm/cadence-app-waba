@@ -4,12 +4,15 @@ import { patchRoute } from "../../bridge/route";
 import { routable,useOnPush,type DisplayScope } from "../../bridge/scope";
 import { serviceCall,serviceSlot } from "../../bridge/services";
 import type { Recipient } from "./Templates";
-import { declinedReason,errorText,parseConversation,parseConversations,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Message,type ReplyState,type ReplyStatus } from "./door";
+import { declinedReason,errorText,parseConversation,parseConversations,parseDraft,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Draft,type Message,type ReplyState,type ReplyStatus } from "./door";
 
 const PAGE = 25;
+/** What the copilot may show, derived from the host-granted actions (members get the draft read-only). */
+export interface Assist { show: boolean; brief: boolean; open: boolean; discard: boolean }
+const DRAFT_POLL_MS = 5000;
 type Load<T> = { state: "loading" } | { state: "ok"; value: T } | { state: "failed"; text: string };
 
-export default function Inbox({ scope, canReply, canTemplate, routeId: routed, onRecipient }: { scope: DisplayScope; canReply: boolean; canTemplate: boolean; routeId: string | null; onRecipient: (r: Recipient) => void }) {
+export default function Inbox({ scope, canReply, canTemplate, assist, routeId: routed, onRecipient }: { scope: DisplayScope; canReply: boolean; canTemplate: boolean; assist: Assist; routeId: string | null; onRecipient: (r: Recipient) => void }) {
   const [rows, setRows] = useState<ConversationRow[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [list, setList] = useState<"loading" | "ok" | "more" | string>("loading");
@@ -57,13 +60,13 @@ export default function Inbox({ scope, canReply, canTemplate, routeId: routed, o
       {cursor && !failed && <Button size="sm" onClick={() => { void page(cursor); }} loading={list === "more"}>Load more</Button>}
     </div>
     <div className="waba-thread">
-      {selected ? <Thread key={selected} scope={scope} id={selected} canReply={canReply} canTemplate={canTemplate} onRecipient={onRecipient} onBack={() => select(null)} />
+      {selected ? <Thread key={selected} scope={scope} id={selected} canReply={canReply} canTemplate={canTemplate} assist={assist} onRecipient={onRecipient} onBack={() => select(null)} />
         : <EmptyState title="Select a conversation" name="thread">Messages and the reply composer appear here.</EmptyState>}
     </div>
   </section>;
 }
 
-function Thread({ scope, id, canReply, canTemplate, onRecipient, onBack }: { scope: DisplayScope; id: string; canReply: boolean; canTemplate: boolean; onRecipient: (r: Recipient) => void; onBack: () => void }) {
+function Thread({ scope, id, canReply, canTemplate, assist, onRecipient, onBack }: { scope: DisplayScope; id: string; canReply: boolean; canTemplate: boolean; assist: Assist; onRecipient: (r: Recipient) => void; onBack: () => void }) {
   const [conversation, setConversation] = useState<Load<Conversation>>({ state: "loading" });
   const [messages, setMessages] = useState<Load<{ rows: Message[]; cursor: string | null }>>({ state: "loading" });
   // `quiet` is a host-push refresh: shown data stays on a failed read, and
@@ -80,8 +83,29 @@ function Thread({ scope, id, canReply, canTemplate, onRecipient, onBack }: { sco
         : { state: "ok", value: { rows: got.rows, cursor: got.cursor } });
     } catch (e) { setMessages(m => quiet && m.state === "ok" ? m : { state: "failed", text: errorText(e, "Messages could not be read.") }); }
   }, [scope, id]);
-  const reload = useCallback(() => { void show(); void read(); }, [show, read]);
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [inserted, setInserted] = useState<{ text: string; n: number } | null>(null);
+  const [assistNote, setAssistNote] = useState<string | null>(null);
+  const readDraft = useCallback(async () => {
+    if (!assist.show) { setDraft(null); return; }
+    // A failed read keeps what is shown: the chip never invents or drops a draft.
+    try { setDraft(parseDraft(await serviceCall(scope, "whatsapp.draft.show", { conversation_id: id }))); } catch { /* next poll retries */ }
+  }, [scope, id, assist.show]);
+  useEffect(() => {
+    void readDraft();
+    if (!assist.show) return;
+    const t = setInterval(() => { void readDraft(); }, DRAFT_POLL_MS);
+    return () => clearInterval(t);
+  }, [readDraft, assist.show]);
+  const reload = useCallback(() => { void show(); void read(); void readDraft(); }, [show, read, readDraft]);
   useEffect(() => { reload(); }, [reload]);
+  async function discard() {
+    setAssistNote(null);
+    try { await serviceCall(scope, "whatsapp.draft.discard", { conversation_id: id }); setDraft(null); }
+    catch (e) { setAssistNote(errorText(e, "The draft could not be discarded.")); }
+  }
+  // The reply went out: its draft is spent. A failed discard leaves the chip, never a retry loop.
+  const onSent = useCallback(() => { if (assist.discard) void discard(); }, [assist.discard, scope, id]);
   useOnPush(() => Promise.all([show(true), read(null, true)]));
   const c = conversation.state === "ok" ? conversation.value : null;
   const ordered = messages.state === "ok" ? [...messages.value.rows].sort((a, b) => (Date.parse(a.createdAt ?? "") || 0) - (Date.parse(b.createdAt ?? "") || 0)) : [];
@@ -91,6 +115,8 @@ function Thread({ scope, id, canReply, canTemplate, onRecipient, onBack }: { sco
       <h2 id="waba-thread-title">{c ? c.contact.name ?? c.contact.phone ?? "Unknown contact" : "Conversation"}</h2>
       <Button size="sm" onClick={reload}>Refresh</Button>
     </header>
+    {assist.brief && <Brief scope={scope} id={id} canOpen={assist.open} />}
+    {draft && <DraftChip draft={draft} canInsert={canReply && !!c && windowOpen(c)} canDiscard={assist.discard} note={assistNote} onInsert={() => setInserted(i => ({ text: draft.text, n: (i?.n ?? 0) + 1 }))} onDiscard={() => { void discard(); }} />}
     {conversation.state === "loading" ? <Loading>Reading the conversation…</Loading>
       : conversation.state === "failed" ? <ErrorNotice onRetry={() => { void show(); }}>{conversation.text}</ErrorNotice>
       : <p className="waba-muted">{c!.contact.phone ?? ""}{c!.status ? ` · ${c!.status}` : ""} · last inbound {when(c!.lastInboundAt)}</p>}
@@ -104,22 +130,61 @@ function Thread({ scope, id, canReply, canTemplate, onRecipient, onBack }: { sco
             <span className="waba-muted">{when(m.createdAt)}{m.status ? ` · ${m.status}` : ""}</span>
           </li>)}</ol>}
       </>}
-    {c && (canReply ? <Composer scope={scope} conversation={c} onChanged={reload} />
+    {c && (canReply ? <Composer scope={scope} conversation={c} inserted={inserted} onSent={onSent} onChanged={reload} />
       : <Notice state="read-only">You can read this inbox. Only the workspace operator can reply.</Notice>)}
     {c && canTemplate && <Button size="sm" onClick={() => { onRecipient(c); void patchRoute({ section: "templates", view: "list", record_id: null }).catch(() => undefined); }}>Send an approved template…</Button>}
   </article>;
+}
+
+function Brief({ scope, id, canOpen }: { scope: DisplayScope; id: string; canOpen: boolean }) {
+  const [guidance, setGuidance] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  async function brief() {
+    setBusy(true); setNote(null);
+    try {
+      // The host draws the card over this exact guidance; its tap runs the brief, then opens the Assistant.
+      await serviceSlot(scope, "chat.whatsapp.brief", { conversation_id: id, guidance: guidance.trim() });
+      setNote("The assistant is drafting. The draft appears here when it is ready.");
+    } catch (e) { setNote(errorText(e, "The assistant was not asked (cancelled or refused).")); }
+    finally { setBusy(false); }
+  }
+  return <div className="waba-assist">
+    <Field label="Guidance for the assistant (optional)" hint="For example the tone, or what to offer. The assistant reads this conversation only.">
+      {c => <textarea {...c} className="field" rows={2} maxLength={2000} value={guidance} disabled={busy} onChange={e => setGuidance(e.target.value)} />}
+    </Field>
+    <div className="waba-head">
+      <Button size="sm" onClick={() => { void brief(); }} loading={busy}>Draft with assistant</Button>
+      {canOpen && <Button size="sm" variant="ghost" onClick={() => { void serviceCall(scope, "chat.whatsapp.open", { conversation_id: id }).catch(() => undefined); }}>Open assistant</Button>}
+    </div>
+    {note && <p className="waba-muted" role="status">{note}</p>}
+  </div>;
+}
+
+function DraftChip({ draft, canInsert, canDiscard, note, onInsert, onDiscard }: { draft: Draft; canInsert: boolean; canDiscard: boolean; note: string | null; onInsert: () => void; onDiscard: () => void }) {
+  return <Notice state="assistant-draft">
+    <strong>Assistant draft</strong>
+    <blockquote className="waba-quote">{draft.text}</blockquote>
+    {(canInsert || canDiscard) && <div className="waba-head">
+      {canInsert && <Button size="sm" onClick={onInsert}>Insert</Button>}
+      {canDiscard && <Button size="sm" variant="ghost" onClick={onDiscard}>Discard</Button>}
+    </div>}
+    {note && <p className="waba-muted" role="alert">{note}</p>}
+  </Notice>;
 }
 
 /** One reply = prepare (host mints the effect and digest) → the host-drawn
  *  approval SLOT over exactly the prepared text. Nothing is retried. */
 type Attempt = { text: string; effectId: string } & ({ state: "approving" } | { state: ReplyState } | { state: "checking" } | { state: "status"; status: ReplyStatus } | { state: "cancelled"; reason: string | null });
 
-function Composer({ scope, conversation, onChanged }: { scope: DisplayScope; conversation: Conversation; onChanged: () => void }) {
+function Composer({ scope, conversation, inserted, onSent, onChanged }: { scope: DisplayScope; conversation: Conversation; inserted: { text: string; n: number } | null; onSent: () => void; onChanged: () => void }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState<Attempt | null>(null);
   const open = windowOpen(conversation);
+  // Insert only fills the text for editing; nothing is prepared until Send…
+  useEffect(() => { if (inserted) setText(inserted.text); }, [inserted]);
   async function approve(frozen: { text: string; effectId: string }) {
     setAttempt({ ...frozen, state: "approving" });
     try {
@@ -129,6 +194,7 @@ function Composer({ scope, conversation, onChanged }: { scope: DisplayScope; con
       const state = sendState(done);
       setAttempt({ ...frozen, state });
       if (state === "sent" || state === "uncertain") setText("");
+      if (state === "sent") onSent();
     } catch (e) {
       // A refused card may be a cancel or a host refusal: the host record decides.
       await check(frozen, e);
@@ -144,6 +210,7 @@ function Composer({ scope, conversation, onChanged }: { scope: DisplayScope; con
       setAttempt(cancelled ? { ...frozen, state: "cancelled", reason: declinedReason(refusal).cancelled ? null : declinedReason(refusal).text } : { ...frozen, state: "status", status });
       // Anything that may have left the host is never offered for resend.
       if (!cancelled && !["prepared", "failed", "refused"].includes(status.state)) setText("");
+      if (status.state === "sent") onSent();
     } catch { setAttempt({ ...frozen, state: "uncertain" }); setText(""); }
   }
   async function send() {

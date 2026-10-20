@@ -83,6 +83,15 @@ export function parseReplyStatus(v: unknown): ReplyStatus {
   if (!obj(v) || typeof v.state !== "string") bad();
   return { state: v.state, door: obj(v.door) ? str(v.door.state) : null };
 }
+/** A parked assistant draft (host `whatsapp.draft.show`); null when none is parked. */
+export interface Draft { draftId: string; text: string }
+export function parseDraft(v: unknown): Draft | null {
+  if (!obj(v) || !("draft" in v)) bad();
+  if (v.draft === null) return null;
+  const d = v.draft;
+  if (!obj(d) || !str(d.draft_id) || typeof d.text !== "string" || !d.text) bad();
+  return { draftId: d.draft_id as string, text: d.text };
+}
 /** The free-text window: open only on an explicit `freeform` mode whose bound has not passed. */
 export function windowOpen(c: Pick<ConversationRow, "replyMode" | "freeformUntil">, now = Date.now()): boolean {
   if (c.replyMode !== "freeform") return false;
@@ -100,7 +109,14 @@ export function declinedReason(error: unknown): { cancelled: boolean; code: stri
   const api = error instanceof ApiError ? error : null;
   return { cancelled: !api || api.code === "cancelled", code: api?.code ?? null, text: api?.message || null };
 }
+/** Typed host refusals (`refusal.code`) with a clear sentence; any other code keeps the host message. */
+const REFUSALS: Record<string, string> = {
+  test_limit: "Test limit reached: up to 5 test sends per 24 hours.",
+  invalid_request: "The host refused this request as invalid. Check the fields and try again.",
+};
 export function errorText(error: unknown, fallback: string): string {
+  const code = error instanceof ApiError ? (error as ApiError & { code?: unknown }).code : undefined;
+  if (typeof code === "string" && Object.hasOwn(REFUSALS, code)) return REFUSALS[code];
   if (error instanceof ApiError && error.message) return error.message;
   if (error instanceof Error && error.message) return error.message;
   return fallback;
