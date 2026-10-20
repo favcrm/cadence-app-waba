@@ -1,9 +1,9 @@
 import { ApiError } from "@cadence/screen-ui";
 import { useSyncExternalStore } from "react";
 import { exact } from "./channel";
-import { OPERATIONS } from "./services";
+import { OPERATIONS,type Section } from "./services";
 export interface DisplayScope { installId: string; contextId: string }
-export interface Route { section: "connection" | "inbox"; view: "list" | "new"; record_id: string | null; segment_id: string | null }
+export interface Route { section: Section; view: "list" | "new"; record_id: string | null; segment_id: string | null }
 export interface ScopeSnapshot { scope: DisplayScope; digest: string; actions: string[]; route: Route }
 let snapshot: ScopeSnapshot | null = null;
 let error: string | null = null;
@@ -15,11 +15,14 @@ export function useScope() { return useSyncExternalStore(subscribeScope, getScop
 export function scopeError() { return error; }
 export function clearScope(reason: string): void { snapshot = null; error = reason; notify(); }
 const obj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+/** A selector the daemon's route fence admits (`proto::identifier`: 1–64
+ *  lowercase letters, digits or hyphens). Other ids stay a local selection. */
+export const routable = (v: string) => /^[a-z0-9][a-z0-9-]{0,63}$/.test(v);
 export const routeId = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(v);
 const digest = (v: unknown) => typeof v === "string" && /^sha256:[a-f0-9]{64}$/.test(v);
 function invalid(): never { throw new ApiError("Invalid WhatsApp scope projection", 502); }
 export function parseRoute(v: unknown): Route {
-  if (!obj(v) || !exact(v, ["section", "view", "record_id", "segment_id"]) || !["connection", "inbox"].includes(v.section as string) || !["list", "new"].includes(v.view as string) || (v.record_id !== null && !routeId(v.record_id)) || (v.segment_id !== null && !routeId(v.segment_id))) invalid();
+  if (!obj(v) || !exact(v, ["section", "view", "record_id", "segment_id"]) || !["connection", "inbox", "templates", "broadcasts"].includes(v.section as string) || !["list", "new"].includes(v.view as string) || (v.record_id !== null && !routeId(v.record_id)) || (v.segment_id !== null && !routeId(v.segment_id))) invalid();
   return v as unknown as Route;
 }
 export function acceptPush(p: Record<string, unknown>): void {

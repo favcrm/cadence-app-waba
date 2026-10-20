@@ -16,18 +16,18 @@
     {
       "name": "client.js",
       "media_type": "text/javascript",
-      "size": 30057,
-      "sha256": "sha256:2f28c2c4e63125bcc31b01ff1a68e6d330d946bd6a31dbcedf5392a42b5a8a33"
+      "size": 74599,
+      "sha256": "sha256:97c413ea0eddbae50e45ec80346a34238ffd970aae3f37a139aefda717af75d3"
     },
     {
       "name": "waba.css",
       "media_type": "text/css",
-      "size": 25279,
-      "sha256": "sha256:163bde6c1490e8ec68a6fd26fc523c36a1094acc81c6ae02abe25e4c4633d924"
+      "size": 25916,
+      "sha256": "sha256:82d9a9da4fdb65d554e4845ba78c192a99037782b554db0cce4901b25d24dc90"
     }
   ],
   "provenance": {
-    "source_digest": "sha256:4baa7efed37b1a221a054b3779ce51265668368355c784fb1fd5ce3646b15ff1",
+    "source_digest": "sha256:455fc20b07744e111382ec11ea62fcae08c92c70cd5bb14b991469a701563f12",
     "sdk_digest": "sha256:fd65c974511e63b3996e9fa7e438fb4e39df5f508d11636116ef150fcc123e35",
     "toolchain_digest": "sha256:e21cfc8222db408abe6ba5a482520639d9cf4b96481c19aff4b4246af8a65e42"
   },
@@ -45,8 +45,23 @@
     "whatsapp.messages",
     "whatsapp.reply.prepare",
     "whatsapp.reply.status",
+    "whatsapp.templates.list",
+    "whatsapp.template.show",
+    "whatsapp.template.prepare",
+    "whatsapp.template.status",
+    "whatsapp.broadcasts.list",
+    "whatsapp.broadcast.show",
+    "whatsapp.broadcast.estimate",
+    "whatsapp.broadcast.results",
+    "whatsapp.broadcast.draft",
+    "whatsapp.broadcast.test.prepare",
+    "whatsapp.broadcast.prepare",
     "screen.route.patch",
-    "whatsapp.reply.send"
+    "whatsapp.reply.send",
+    "whatsapp.template.send",
+    "whatsapp.broadcast.test.send",
+    "whatsapp.broadcast.send",
+    "whatsapp.broadcast.stop"
   ],
   "navigation": {
     "section_query": "waba",
@@ -55,6 +70,14 @@
       {
         "id": "inbox",
         "label": "Inbox"
+      },
+      {
+        "id": "templates",
+        "label": "Templates"
+      },
+      {
+        "id": "broadcasts",
+        "label": "Broadcasts"
       },
       {
         "id": "connection",
