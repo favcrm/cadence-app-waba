@@ -15,6 +15,9 @@ export function useScope() { return useSyncExternalStore(subscribeScope, getScop
 export function scopeError() { return error; }
 export function clearScope(reason: string): void { snapshot = null; error = reason; notify(); }
 const obj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+/** A selector the daemon's route fence admits (`proto::identifier`: 1–64
+ *  lowercase letters, digits or hyphens). Other ids stay a local selection. */
+export const routable = (v: string) => /^[a-z0-9][a-z0-9-]{0,63}$/.test(v);
 export const routeId = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(v);
 const digest = (v: unknown) => typeof v === "string" && /^sha256:[a-f0-9]{64}$/.test(v);
 function invalid(): never { throw new ApiError("Invalid WhatsApp scope projection", 502); }

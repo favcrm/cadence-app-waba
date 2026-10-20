@@ -1,5 +1,5 @@
 import { ErrorNotice,Loading } from "@cadence/screen-ui";
-import { useState } from "react";
+import { useMemo,useState } from "react";
 import { scopeError,useScope } from "../../bridge/scope";
 import Broadcasts from "./Broadcasts";
 import Connection from "./Connection";
@@ -11,8 +11,12 @@ export default function WabaScreen() {
   // The template recipient outlives a section switch: the host re-pushes the
   // route into this frame, and the host's nav links drop the record id.
   const [recipient, setRecipient] = useState<Recipient | null>(null);
-  if (!snapshot) return scopeError() ? <ErrorNotice>{scopeError()}</ErrorNotice> : <Loading>Waiting for the verified WhatsApp mount…</Loading>;
-  const { scope, route, actions } = snapshot;
+  // The host re-pushes the scope every few seconds as a new object; pages key
+  // their reads on this stable one, so a push never resets loaded data or forms.
+  const installId = snapshot?.scope.installId, contextId = snapshot?.scope.contextId;
+  const scope = useMemo(() => installId === undefined || contextId === undefined ? null : { installId, contextId }, [installId, contextId]);
+  if (!snapshot || !scope) return scopeError() ? <ErrorNotice>{scopeError()}</ErrorNotice> : <Loading>Waiting for the verified WhatsApp mount…</Loading>;
+  const { route, actions } = snapshot;
   // Display affordances only, derived from the host-granted actions (members
   // get the reads); the host independently refuses every write it did not grant.
   const can = (...verbs: string[]) => verbs.every(v => actions.includes(v));

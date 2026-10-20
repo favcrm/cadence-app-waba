@@ -1,7 +1,7 @@
 import { Button,Detail,EmptyState,ErrorNotice,Field,Loading,Notice } from "@cadence/screen-ui";
 import { useCallback,useEffect,useState } from "react";
 import { patchRoute } from "../../bridge/route";
-import { routeId,type DisplayScope } from "../../bridge/scope";
+import { routable,type DisplayScope } from "../../bridge/scope";
 import { serviceCall,serviceSlot } from "../../bridge/services";
 import { errorText,parseConversations,parseReplyStatus,when,windowOpen,type ConversationRow,type ReplyStatus } from "./door";
 import { bodyIndexes,parsePrepared,parseTemplate,parseTemplates,render,sendOutcome,valueOk,type SendState,type Template } from "./door2";
@@ -24,8 +24,8 @@ export default function Templates({ scope, canSend, routeId: routed, recipient, 
   }, [scope, all]);
   useEffect(() => { void load(); }, [load]);
   function select(id: string | null) {
-    if (id === null || routeId(id)) { setLocal(null); void patchRoute({ section: "templates", view: "list", record_id: id }).catch(() => undefined); }
-    else setLocal(id);
+    if (id === null || routable(id)) { setLocal(null); void patchRoute({ section: "templates", view: "list", record_id: id }).catch(() => undefined); }
+    else { setLocal(id); void patchRoute({ section: "templates", view: "list", record_id: null }).catch(() => undefined); }
   }
   return <section className="waba-page waba-split" data-selected={selected ? "yes" : "no"} aria-label="Templates">
     <div className="waba-list" aria-labelledby="waba-templates-title">
@@ -55,7 +55,6 @@ export default function Templates({ scope, canSend, routeId: routed, recipient, 
 function TemplateDetail({ scope, id, canSend, recipient, onRecipient, onBack }: { scope: DisplayScope; id: string; canSend: boolean; recipient: Recipient | null; onRecipient: (r: Recipient | null) => void; onBack: () => void }) {
   const [read, setRead] = useState<Load<Template>>({ state: "loading" });
   const show = useCallback(async () => {
-    setRead({ state: "loading" });
     try { setRead({ state: "ok", value: parseTemplate(await serviceCall(scope, "whatsapp.template.show", { template_id: id })) }); }
     catch (e) { setRead({ state: "failed", text: errorText(e, "The template could not be read.") }); }
   }, [scope, id]);
@@ -129,7 +128,7 @@ function UseInConversation({ scope, template, recipient, onRecipient }: { scope:
     <h3>Use in conversation</h3>
     <p className="waba-muted">To <strong>{to.contact.name ?? to.contact.phone ?? to.conversationId}</strong>{to.contact.name && to.contact.phone ? ` · ${to.contact.phone}` : ""} · {windowOpen(to) ? "reply window open" : "reply window closed; an approved template may still be sent"}
       {" "}<Button size="sm" variant="ghost" disabled={busy || locked} onClick={() => onRecipient(null)}>Change</Button>
-      {" "}<Button size="sm" variant="ghost" onClick={() => { void patchRoute({ section: "inbox", view: "list", record_id: routeId(to.conversationId) ? to.conversationId : null }).catch(() => undefined); }}>Open conversation</Button></p>
+      {" "}<Button size="sm" variant="ghost" onClick={() => { void patchRoute({ section: "inbox", view: "list", record_id: routable(to.conversationId) ? to.conversationId : null }).catch(() => undefined); }}>Open conversation</Button></p>
     {indexes.map(n => <Field key={n} label={`Variable {{${n}}}`} hint={sample(template, n) ? `Example: ${sample(template, n)}` : undefined} error={values[n] !== undefined && !valueOk(values[n]) ? "1–1024 characters, no leading or trailing spaces." : undefined}>
       {c => <input {...c} className="field" value={values[n] ?? ""} maxLength={1024} disabled={busy || locked} onChange={e => setValues(v => ({ ...v, [n]: e.target.value }))} />}
     </Field>)}

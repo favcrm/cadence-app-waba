@@ -1,7 +1,7 @@
 import { Button,Detail,EmptyState,ErrorNotice,Field,Loading,Notice,Select } from "@cadence/screen-ui";
 import { useCallback,useEffect,useState,type ReactNode } from "react";
 import { patchRoute } from "../../bridge/route";
-import { routeId,type DisplayScope } from "../../bridge/scope";
+import { routable,type DisplayScope } from "../../bridge/scope";
 import { serviceCall,serviceSlot,type Audience } from "../../bridge/services";
 import { errorText,when } from "./door";
 import { bodyIndexes,excluded,parseBroadcast,parseBroadcasts,parseDraft,parseEstimate,parsePrepared,parseResults,parseStop,parseTemplates,sendOutcome,testLimit,valueOk,type Broadcast,type BroadcastRow,type Estimate,type Result,type SendState,type Template } from "./door2";
@@ -34,7 +34,7 @@ export default function Broadcasts({ scope, rights, routeId: routed, creating }:
   }, [scope]);
   useEffect(() => { void page(null); }, [page]);
   function select(id: string | null) {
-    if (id === null || routeId(id)) { setLocal(null); go({ view: "list", record_id: id }); }
+    if (id === null || routable(id)) { setLocal(null); go({ view: "list", record_id: id }); }
     else { setLocal(id); go({ view: "list", record_id: null }); }
   }
   const saved = (id: string) => { void page(null); select(id); };

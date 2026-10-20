@@ -1,7 +1,7 @@
 import { Button,EmptyState,ErrorNotice,Field,Loading,Notice } from "@cadence/screen-ui";
 import { useCallback,useEffect,useState } from "react";
 import { patchRoute } from "../../bridge/route";
-import { routeId,type DisplayScope } from "../../bridge/scope";
+import { routable,type DisplayScope } from "../../bridge/scope";
 import { serviceCall,serviceSlot } from "../../bridge/services";
 import type { Recipient } from "./Templates";
 import { errorText,parseConversation,parseConversations,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Message,type ReplyState,type ReplyStatus } from "./door";
@@ -27,8 +27,8 @@ export default function Inbox({ scope, canReply, canTemplate, routeId: routed, o
   }, [scope]);
   useEffect(() => { void page(null); }, [page]);
   function select(id: string | null) {
-    if (id === null || routeId(id)) { setLocal(null); void patchRoute({ section: "inbox", view: "list", record_id: id }).catch(() => undefined); }
-    else setLocal(id);
+    if (id === null || routable(id)) { setLocal(null); void patchRoute({ section: "inbox", view: "list", record_id: id }).catch(() => undefined); }
+    else { setLocal(id); void patchRoute({ section: "inbox", view: "list", record_id: null }).catch(() => undefined); }
   }
   const needle = filter.trim().toLowerCase();
   const shown = needle ? rows.filter(r => [r.contact.name, r.contact.phone, r.lastMessage?.body].some(v => v?.toLowerCase().includes(needle))) : rows;
