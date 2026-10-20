@@ -434,7 +434,7 @@ class BuildAndExclusionTests(unittest.TestCase):
         result = pkg.verify_archive(self.out / "waba-0.1.0.tar.gz")
         self.assertEqual(result["app"], "waba")
         self.assertEqual(result["version"], "0.1.0")
-        self.assertEqual(result["files"], 7)
+        self.assertEqual(result["files"], 8)
 
 
 class VerifyParityTests(unittest.TestCase):
@@ -583,7 +583,7 @@ class VerifyParityTests(unittest.TestCase):
         # The real built archive carries explicit dir entries with a
         # trailing slash — canonicalization must not reject it.
         result = pkg.verify_archive(self.out / "waba-0.1.0.tar.gz")
-        self.assertEqual(result["files"], 7)
+        self.assertEqual(result["files"], 8)
 
 
 class CleanRefusalTests(unittest.TestCase):

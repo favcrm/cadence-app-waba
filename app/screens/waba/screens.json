@@ -16,18 +16,18 @@
     {
       "name": "client.js",
       "media_type": "text/javascript",
-      "size": 76698,
-      "sha256": "sha256:a3e03d6ea7b8f4114344569d93333f8a17a2ef907d6fab1c599059253ded8e51"
+      "size": 81396,
+      "sha256": "sha256:b81a229625f6667a522873474cb8a8216efb30d3d41f6d0ae23b90d0e1b21c47"
     },
     {
       "name": "waba.css",
       "media_type": "text/css",
-      "size": 25916,
-      "sha256": "sha256:82d9a9da4fdb65d554e4845ba78c192a99037782b554db0cce4901b25d24dc90"
+      "size": 26025,
+      "sha256": "sha256:8e662ac0d86151ad0a3dba4e3878f51b01cbde5066fbe2293351646e9b646fa2"
     }
   ],
   "provenance": {
-    "source_digest": "sha256:50263e001c4c917adb5817ffd2b0c9d38a32194ff5351bbbf1e3e52edf0cef8b",
+    "source_digest": "sha256:93b5609f2a4b4edff39e414fb222e211e989834f9dd79a15c0a870adb4fcb7fb",
     "sdk_digest": "sha256:fd65c974511e63b3996e9fa7e438fb4e39df5f508d11636116ef150fcc123e35",
     "toolchain_digest": "sha256:e21cfc8222db408abe6ba5a482520639d9cf4b96481c19aff4b4246af8a65e42"
   },
@@ -56,12 +56,16 @@
     "whatsapp.broadcast.draft",
     "whatsapp.broadcast.test.prepare",
     "whatsapp.broadcast.prepare",
+    "chat.whatsapp.open",
+    "whatsapp.draft.show",
+    "whatsapp.draft.discard",
     "screen.route.patch",
     "whatsapp.reply.send",
     "whatsapp.template.send",
     "whatsapp.broadcast.test.send",
     "whatsapp.broadcast.send",
-    "whatsapp.broadcast.stop"
+    "whatsapp.broadcast.stop",
+    "chat.whatsapp.brief"
   ],
   "navigation": {
     "section_query": "waba",
@@ -82,6 +86,10 @@
       {
         "id": "connection",
         "label": "Connection"
+      },
+      {
+        "id": "ai",
+        "label": "AI agent"
       }
     ]
   }

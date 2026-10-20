@@ -18,7 +18,7 @@ exact(decl.provenance,['source_digest','sdk_digest','toolchain_digest']);
 const expected = {source_digest:`sha256:${sourceDigest()}`,sdk_digest:`sha256:${env.pin.archive.sha256}`,toolchain_digest:`sha256:${hash(JSON.stringify(env.pin.toolchain))}`};
 if (Object.keys(expected).some(k => decl.provenance[k] !== expected[k])) fail('Source/SDK/toolchain provenance mismatch');
 exact(decl.navigation,['section_query','default_section','sections']);
-const navigation={section_query:'waba',default_section:'inbox',sections:[{id:'inbox',label:'Inbox'},{id:'templates',label:'Templates'},{id:'broadcasts',label:'Broadcasts'},{id:'connection',label:'Connection'}]};
+const navigation={section_query:'waba',default_section:'inbox',sections:[{id:'inbox',label:'Inbox'},{id:'templates',label:'Templates'},{id:'broadcasts',label:'Broadcasts'},{id:'connection',label:'Connection'},{id:'ai',label:'AI agent'}]};
 if (JSON.stringify(decl.navigation) !== JSON.stringify(navigation)) fail('WhatsApp navigation mismatch');
 const media={js:'text/javascript',css:'text/css',svg:'image/svg+xml',json:'application/json'};
 if (!Array.isArray(decl.assets) || !decl.assets.length || decl.assets.length > 32) fail('Asset count exceeds bounds');

@@ -57,6 +57,15 @@ cadence app catalog approve INSTALL_ID --digest BUNDLE_DIGEST
   again. "Accepted" or "scheduled" is never a delivery. Meta charges the
   WhatsApp Business Account per delivered marketing message.
 
+- **AI agent.** Choose copilot or human-only for this install (a
+  session-only choice where the browser refuses storage). In copilot
+  mode the Inbox offers "Draft with assistant": the operator confirms
+  the guidance in the host card, the Assistant reads this one
+  conversation (last 20 text messages, phone masked) and parks a draft.
+  The draft shows as "Assistant draft" with Insert (fills the composer,
+  never prepares or sends) and Discard; a successful send discards it.
+  Members see the draft read-only. "Automatic replies: unavailable".
+
 Members see every page read-only: the host grants them the reads only,
 so the composer, the connect action and every draft, test, send and
 stop control are not shown.

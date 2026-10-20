@@ -83,6 +83,15 @@ export function parseReplyStatus(v: unknown): ReplyStatus {
   if (!obj(v) || typeof v.state !== "string") bad();
   return { state: v.state, door: obj(v.door) ? str(v.door.state) : null };
 }
+/** A parked assistant draft (host `whatsapp.draft.show`); null when none is parked. */
+export interface Draft { draftId: string; text: string }
+export function parseDraft(v: unknown): Draft | null {
+  if (!obj(v) || !("draft" in v)) bad();
+  if (v.draft === null) return null;
+  const d = v.draft;
+  if (!obj(d) || !str(d.draft_id) || typeof d.text !== "string" || !d.text) bad();
+  return { draftId: d.draft_id as string, text: d.text };
+}
 /** The free-text window: open only on an explicit `freeform` mode whose bound has not passed. */
 export function windowOpen(c: Pick<ConversationRow, "replyMode" | "freeformUntil">, now = Date.now()): boolean {
   if (c.replyMode !== "freeform") return false;
