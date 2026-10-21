@@ -297,6 +297,8 @@ class ManifestMetadataTests(unittest.TestCase):
         self.assertEqual(pkg.parse_manifest(listed).app, "waba")
         with self.assertRaisesRegex(pkg.PackageError, "listing"):
             pkg.parse_manifest(APP_MD.replace("---\n\n", "listing: copy\n---\n\n", 1))
+        with self.assertRaisesRegex(pkg.PackageError, "listing"):
+            pkg.parse_manifest(APP_MD.replace("---\n\n", "listing:\n---\n\n", 1))
 
     def test_version_semver_guard(self):
         pkg._check_version_semver("0.1.0")

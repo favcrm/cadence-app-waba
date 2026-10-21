@@ -266,6 +266,7 @@ def parse_manifest(text: str) -> Manifest:
     # `listing:` (CAD-1129) is display-only catalog copy; its nested block
     # is skipped here and validated by the host and the marketplace import.
     in_listing = False
+    listing_children = None  # None: no `listing:` key; else nested line count
     for raw_line in yaml.splitlines():
         if not raw_line.strip() or raw_line.lstrip().startswith("#"):
             continue
@@ -304,6 +305,7 @@ def parse_manifest(text: str) -> Manifest:
                 if value.strip():
                     raise PackageError(f"{MANIFEST} `listing:` is a mapping")
                 in_listing = True
+                listing_children = 0
                 continue
             if key == "needs":
                 # `needs:` holds a mapping — a null/empty/scalar value
@@ -325,6 +327,7 @@ def parse_manifest(text: str) -> Manifest:
             # never pretends to be a string.
             _refuse_nonstring_scalar(key, fields[key])
         elif in_listing:
+            listing_children += 1
             continue
         elif in_needs:
             indent = len(raw_line) - len(raw_line.lstrip())
@@ -368,6 +371,10 @@ def parse_manifest(text: str) -> Manifest:
                 f"{MANIFEST} frontmatter: nested content is only supported "
                 "under `needs:`"
             )
+
+    # A bare `listing:` is a YAML null, not a mapping; the host refuses it.
+    if listing_children == 0:
+        raise PackageError(f"{MANIFEST} `listing:` is a mapping")
 
     # A bare `needs:` that produced no children is a null scalar on the
     # host (`needs is a mapping` → refuse), not an empty mapping.
