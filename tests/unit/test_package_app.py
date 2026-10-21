@@ -32,6 +32,10 @@ pkg = importlib.util.module_from_spec(spec)
 sys.modules["package_app"] = pkg  # dataclass resolution needs the module registered
 spec.loader.exec_module(pkg)
 
+# Tests that package the real app/ follow its manifest version.
+REAL_VERSION = pkg.parse_manifest((REPO / "app" / "app.md").read_text(encoding="utf-8")).version
+REAL_ROOT = f"waba-{REAL_VERSION}"
+
 APP_MD = """---
 app: waba
 title: CRM
@@ -280,12 +284,21 @@ class ManifestMetadataTests(unittest.TestCase):
     def test_real_app_md_parses_declared_fields(self):
         manifest = pkg.parse_manifest((REPO / "app" / "app.md").read_text(encoding="utf-8"))
         self.assertEqual(manifest.app, "waba")
-        self.assertEqual(manifest.version, "0.1.0")
+        self.assertEqual(manifest.version, "0.2.0")
         self.assertEqual(manifest.title, "WhatsApp Business")
         self.assertEqual(manifest.connections, ())
         self.assertIsNone(manifest.view_contract)
         self.assertIsNone(manifest.binding_contract)
         self.assertIsNotNone(manifest.summary)
+
+    def test_listing_block_is_skipped_and_scalar_refuses(self):
+        listed = APP_MD.replace("---\n\n", "listing:\n  tagline: A plain tagline\n  tags: [a, b]\n---\n\n", 1)
+        self.assertNotEqual(listed, APP_MD)
+        self.assertEqual(pkg.parse_manifest(listed).app, "waba")
+        with self.assertRaisesRegex(pkg.PackageError, "listing"):
+            pkg.parse_manifest(APP_MD.replace("---\n\n", "listing: copy\n---\n\n", 1))
+        with self.assertRaisesRegex(pkg.PackageError, "listing"):
+            pkg.parse_manifest(APP_MD.replace("---\n\n", "listing:\n---\n\n", 1))
 
     def test_version_semver_guard(self):
         pkg._check_version_semver("0.1.0")
@@ -409,31 +422,31 @@ class BuildAndExclusionTests(unittest.TestCase):
         # Package the real repo app/: the archive must carry only
         # bundle paths — no scripts/, src/, tests/, docs/, .git, .env.
         self.assertEqual(pkg.main(["build", "--source", str(REPO / "app"), "--outdir", str(self.out)]), 0)
-        archive = self.out / "waba-0.1.0.tar.gz"
+        archive = self.out / f"{REAL_ROOT}.tar.gz"
         names = [n for n, _ in pkg._archive_members(archive)[0]]
         for name in names:
             rel = name.split("/", 1)[1]
             top = rel.split("/", 1)[0]
             self.assertIn(top, {"app.md", "app-actions.json", "app-assistant.json", "app-chat.json", "workflows", "rubrics", "templates", "views", "bindings", "screens"})
             self.assertFalse(any(p.startswith(".") for p in rel.split("/")))
-        self.assertIn("waba-0.1.0/app.md", names)
-        self.assertIn("waba-0.1.0/workflows/reply-draft.md", names)
-        self.assertIn("waba-0.1.0/app-chat.json", names)
+        self.assertIn(f"{REAL_ROOT}/app.md", names)
+        self.assertIn(f"{REAL_ROOT}/workflows/reply-draft.md", names)
+        self.assertIn(f"{REAL_ROOT}/app-chat.json", names)
         self.assertEqual(
-            {n for n in names if n.startswith("waba-0.1.0/screens/")},
+            {n for n in names if n.startswith(f"{REAL_ROOT}/screens/")},
             {
-                "waba-0.1.0/screens/waba/runtime.js",
-                "waba-0.1.0/screens/waba/client.js",
-                "waba-0.1.0/screens/waba/waba.css",
-                "waba-0.1.0/screens/waba/screens.json",
+                f"{REAL_ROOT}/screens/waba/runtime.js",
+                f"{REAL_ROOT}/screens/waba/client.js",
+                f"{REAL_ROOT}/screens/waba/waba.css",
+                f"{REAL_ROOT}/screens/waba/screens.json",
             },
         )
 
     def test_verify_real_archive(self):
         self.assertEqual(pkg.main(["build", "--source", str(REPO / "app"), "--outdir", str(self.out)]), 0)
-        result = pkg.verify_archive(self.out / "waba-0.1.0.tar.gz")
+        result = pkg.verify_archive(self.out / f"{REAL_ROOT}.tar.gz")
         self.assertEqual(result["app"], "waba")
-        self.assertEqual(result["version"], "0.1.0")
+        self.assertEqual(result["version"], REAL_VERSION)
         self.assertEqual(result["files"], 8)
 
 
@@ -461,13 +474,13 @@ class VerifyParityTests(unittest.TestCase):
     def _tar_with(self, label, mutate):
         d = self.dir / label
         d.mkdir()
-        archive = d / "waba-0.1.0.tar.gz"
+        archive = d / f"{REAL_ROOT}.tar.gz"
         import io as _io
         contents = dict(self.original)
         mutate(contents)
         with tarfile.open(archive, "w:gz") as tf:
             for rel, data in contents.items():
-                info = tarfile.TarInfo("waba-0.1.0/" + rel)
+                info = tarfile.TarInfo(f"{REAL_ROOT}/" + rel)
                 info.size = len(data)
                 tf.addfile(info, _io.BytesIO(data))
         pkg.write_sidecar(archive)
@@ -503,12 +516,12 @@ class VerifyParityTests(unittest.TestCase):
             pkg.verify_archive(archive)
 
     def test_verify_refuses_zip_symlink_member(self):
-        archive = self.dir / "ziplink" / "waba-0.1.0.zip"
+        archive = self.dir / "ziplink" / f"{REAL_ROOT}.zip"
         archive.parent.mkdir()
         with zipfile.ZipFile(archive, "w") as zf:
             for rel, data in self.original.items():
-                zf.writestr("waba-0.1.0/" + rel, data)
-            info = zipfile.ZipInfo("waba-0.1.0/rubrics/link.md")
+                zf.writestr(f"{REAL_ROOT}/" + rel, data)
+            info = zipfile.ZipInfo(f"{REAL_ROOT}/rubrics/link.md")
             info.create_system = 3
             info.external_attr = 0o120777 << 16  # unix symlink mode
             zf.writestr(info, "/outside")
@@ -517,12 +530,12 @@ class VerifyParityTests(unittest.TestCase):
             pkg.verify_archive(archive)
 
     def test_verify_refuses_dir_outside_prefix(self):
-        archive = self.dir / "dirout" / "waba-0.1.0.tar.gz"
+        archive = self.dir / "dirout" / f"{REAL_ROOT}.tar.gz"
         archive.parent.mkdir()
         import io as _io
         with tarfile.open(archive, "w:gz") as tf:
             for rel, data in self.original.items():
-                info = tarfile.TarInfo("waba-0.1.0/" + rel)
+                info = tarfile.TarInfo(f"{REAL_ROOT}/" + rel)
                 info.size = len(data)
                 tf.addfile(info, _io.BytesIO(data))
             extra = tarfile.TarInfo("sneaky/")
@@ -535,12 +548,12 @@ class VerifyParityTests(unittest.TestCase):
     # --- R3: non-canonical path aliases refuse; extract can't overwrite ---
 
     def _tar_with_extra_member(self, label, member_name, payload=b"EVIL\n"):
-        archive = self.dir / label / "waba-0.1.0.tar.gz"
+        archive = self.dir / label / f"{REAL_ROOT}.tar.gz"
         archive.parent.mkdir()
         import io as _io
         with tarfile.open(archive, "w:gz") as tf:
             for rel, data in self.original.items():
-                info = tarfile.TarInfo("waba-0.1.0/" + rel)
+                info = tarfile.TarInfo(f"{REAL_ROOT}/" + rel)
                 info.size = len(data)
                 tf.addfile(info, _io.BytesIO(data))
             info = tarfile.TarInfo(member_name)
@@ -553,28 +566,28 @@ class VerifyParityTests(unittest.TestCase):
         # `waba-0.1.0/./workflows/reply-draft.md` collapses to a path that
         # already exists — verify must refuse, else extract overwrites.
         archive = self._tar_with_extra_member(
-            "dotalias", "waba-0.1.0/./workflows/reply-draft.md"
+            "dotalias", f"{REAL_ROOT}/./workflows/reply-draft.md"
         )
         with self.assertRaisesRegex(pkg.PackageError, "canonical|alias"):
             pkg.verify_archive(archive)
 
     def test_verify_refuses_mid_dot_component(self):
         archive = self._tar_with_extra_member(
-            "middot", "waba-0.1.0/workflows/./reply-draft.md"
+            "middot", f"{REAL_ROOT}/workflows/./reply-draft.md"
         )
         with self.assertRaisesRegex(pkg.PackageError, "canonical|alias"):
             pkg.verify_archive(archive)
 
     def test_verify_refuses_double_slash_alias(self):
         archive = self._tar_with_extra_member(
-            "dslash", "waba-0.1.0//workflows/reply-draft.md"
+            "dslash", f"{REAL_ROOT}//workflows/reply-draft.md"
         )
         with self.assertRaisesRegex(pkg.PackageError, "canonical|alias"):
             pkg.verify_archive(archive)
 
     def test_verify_refuses_dotdot_alias(self):
         archive = self._tar_with_extra_member(
-            "ddot", "waba-0.1.0/rubrics/../workflows/reply-draft.md"
+            "ddot", f"{REAL_ROOT}/rubrics/../workflows/reply-draft.md"
         )
         with self.assertRaises(pkg.PackageError):
             pkg.verify_archive(archive)
@@ -582,7 +595,7 @@ class VerifyParityTests(unittest.TestCase):
     def test_legit_dir_trailing_slash_still_passes(self):
         # The real built archive carries explicit dir entries with a
         # trailing slash — canonicalization must not reject it.
-        result = pkg.verify_archive(self.out / "waba-0.1.0.tar.gz")
+        result = pkg.verify_archive(self.out / f"{REAL_ROOT}.tar.gz")
         self.assertEqual(result["files"], 8)
 
 
@@ -601,7 +614,7 @@ class CleanRefusalTests(unittest.TestCase):
         self.assertEqual(
             pkg.main(["build", "--source", str(REPO / "app"), "--outdir", str(out)]), 0
         )
-        return out / "waba-0.1.0.tar.gz"
+        return out / f"{REAL_ROOT}.tar.gz"
 
     def test_non_ascii_sidecar_is_clean_refusal(self):
         archive = self._good_archive()
@@ -627,9 +640,9 @@ class CleanRefusalTests(unittest.TestCase):
             ),
             0,
         )
-        archive = out / "waba-0.1.0.zip"
+        archive = out / f"{REAL_ROOT}.zip"
         raw = bytearray(archive.read_bytes())
-        idx = raw.find(b"waba-0.1.0/app.md")
+        idx = raw.find(f"{REAL_ROOT}/app.md".encode())
         self.assertGreater(idx, 0)
         raw[idx] ^= 0xFF  # corrupt a filename byte in a local header
         archive.write_bytes(raw)

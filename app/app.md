@@ -1,12 +1,30 @@
 ---
 app: waba
 title: WhatsApp Business
-version: '0.1.0'
+version: '0.2.0'
 summary: Connect WhatsApp Business through FavCRM for its inbox, operator-approved replies, templates and broadcasts. The app holds no credentials.
 needs:
   connections: []
   requires:
     contracts: {app-screens: [1], screen-records: [1], screen-startup: [1]}
+listing:
+  tagline: Answer WhatsApp Business chats with AI drafts you approve
+  category: customers
+  tags: [whatsapp, inbox, messaging]
+  publisher:
+    name: Cadence
+  about: WhatsApp Business connects your FavCRM WhatsApp number to Cadence. Read conversations in one inbox, let the assistant draft a reply, and send only the exact text you approve. Take a conversation over from the AI when a person should answer, then hand it back. Approved templates reach customers outside the 24-hour window, and a broadcast goes out only after you approve it. FavCRM keeps the Meta connection and credentials; the app holds none.
+  can:
+    - Show WhatsApp conversations and messages in one inbox
+    - Draft a reply with the assistant, then send only the text you approve
+    - Take a conversation over from the AI and hand it back
+    - Send approved templates, also when the 24-hour window is closed
+    - Send a broadcast you approve, now or scheduled
+  data:
+    stores:
+      - Assistant reply drafts and the AI agent mode you choose
+      - Conversations, messages and templates stay in FavCRM
+    personal: true
 ---
 
 # WhatsApp Business
