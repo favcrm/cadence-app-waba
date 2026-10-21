@@ -2,7 +2,7 @@ import { ApiError } from "@cadence/screen-ui";
 import { useEffect,useRef,useSyncExternalStore } from "react";
 import { exact } from "./channel";
 import { OPERATIONS,type Section } from "./services";
-export interface DisplayScope { installId: string; contextId: string }
+export interface DisplayScope { installId: string; digest: string }
 export interface Route { section: Section; view: "list" | "new"; record_id: string | null; segment_id: string | null }
 export interface ScopeSnapshot { scope: DisplayScope; digest: string; actions: string[]; route: Route }
 let snapshot: ScopeSnapshot | null = null;
@@ -29,6 +29,8 @@ export function useOnPush(refresh: () => Promise<unknown>): void {
 }
 export function scopeError() { return error; }
 export function clearScope(reason: string): void { snapshot = null; error = reason; notify(); }
+/** Set when the host never pushed a screen in time; a late push still wins. */
+export function markUnreachable(): void { if (!snapshot) { error = "The WhatsApp host is unreachable. Reopen this screen from FavCRM."; notify(); } }
 const obj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 /** A selector the daemon's route fence admits (host #1189: 1–64 lowercase
  *  letters, digits, underscores or hyphens). Other ids, and any id an older
@@ -42,15 +44,15 @@ export function parseRoute(v: unknown): Route {
   return v as unknown as Route;
 }
 export function acceptPush(p: Record<string, unknown>): void {
-  if (!exact(p, ["v", "op", "install_id", "context_id", "digest", "tag", "installation", "contexts", "runs", "outbox", "publish_intents", "sources", "defaults", "readiness", "actions", "now", "resume", "route", "read_observations", "presentation_locale"]) || p.tag !== "waba" || !routeId(p.install_id) || !(p.context_id === "" || routeId(p.context_id)) || !digest(p.digest) || !Array.isArray(p.actions) || !p.actions.every(a => typeof a === "string" && OPERATIONS.includes(a)) || new Set(p.actions).size !== p.actions.length) invalid();
-  if (!obj(p.installation) || !exact(p.installation, ["install_id", "name", "title", "version", "digest", "summary"]) || p.installation.install_id !== p.install_id || p.installation.digest !== p.digest || p.installation.name !== "waba" || !["title", "version", "summary"].every(k => typeof (p.installation as Record<string, unknown>)[k] === "string") || !Array.isArray(p.contexts) || !p.contexts.every(c => obj(c) && exact(c, ["id", "label"]) && routeId(c.id) && typeof c.label === "string")) invalid();
+  if (!exact(p, ["v", "op", "install_id", "context_id", "digest", "tag", "installation", "contexts", "runs", "outbox", "publish_intents", "sources", "defaults", "readiness", "actions", "now", "resume", "route", "read_observations", "presentation_locale"]) || p.tag !== "waba" || !routeId(p.install_id) || !(p.context_id === undefined || p.context_id === "" || routeId(p.context_id)) || !digest(p.digest) || !Array.isArray(p.actions) || !p.actions.every(a => typeof a === "string" && OPERATIONS.includes(a)) || new Set(p.actions).size !== p.actions.length) invalid();
+  if (!obj(p.installation) || !exact(p.installation, ["install_id", "name", "title", "version", "digest", "summary"]) || p.installation.install_id !== p.install_id || p.installation.digest !== p.digest || p.installation.name !== "waba" || !["title", "version", "summary"].every(k => typeof (p.installation as Record<string, unknown>)[k] === "string") || (p.contexts !== undefined && (!Array.isArray(p.contexts) || !p.contexts.every(c => obj(c) && exact(c, ["id", "label"]) && routeId(c.id) && typeof c.label === "string")))) invalid();
   if (p.read_observations !== undefined && (!Array.isArray(p.read_observations) || p.read_observations.length > 16)) invalid();
-  if (snapshot && (snapshot.scope.installId !== p.install_id || snapshot.scope.contextId !== p.context_id || snapshot.digest !== p.digest)) invalid();
-  snapshot = { scope: { installId: p.install_id as string, contextId: p.context_id as string }, digest: p.digest as string, actions: p.actions as string[], route: parseRoute(p.route) };
+  if (snapshot && (snapshot.scope.installId !== p.install_id || snapshot.digest !== p.digest)) invalid();
+  snapshot = { scope: { installId: p.install_id as string, digest: p.digest as string }, digest: p.digest as string, actions: p.actions as string[], route: parseRoute(p.route) };
   pushes++; error = null; notify();
 }
 export function assertCurrentScope(scope: DisplayScope): void {
-  if (!snapshot || scope.installId !== snapshot.scope.installId || scope.contextId !== snapshot.scope.contextId) throw new ApiError("WhatsApp scope is absent or retired", 403);
+  if (!snapshot || scope.installId !== snapshot.scope.installId || scope.digest !== snapshot.digest) throw new ApiError("WhatsApp scope is absent or retired", 403);
 }
 export function requireOperation(verb: string): void {
   if (!snapshot || !OPERATIONS.includes(verb) || !snapshot.actions.includes(verb)) throw new ApiError("WhatsApp operation is unavailable on this mount", 403);

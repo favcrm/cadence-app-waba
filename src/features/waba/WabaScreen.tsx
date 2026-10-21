@@ -1,6 +1,6 @@
 import { ErrorNotice,Loading } from "@cadence/screen-ui";
-import { useMemo,useState } from "react";
-import { scopeError,useScope } from "../../bridge/scope";
+import { useEffect,useMemo,useState } from "react";
+import { markUnreachable,scopeError,useScope } from "../../bridge/scope";
 import Broadcasts from "./Broadcasts";
 import AiAgent from "./AiAgent";
 import Connection from "./Connection";
@@ -15,8 +15,10 @@ export default function WabaScreen() {
   const [recipient, setRecipient] = useState<Recipient | null>(null);
   // The host re-pushes the scope every few seconds as a new object; pages key
   // their reads on this stable one, so a push never resets loaded data or forms.
-  const installId = snapshot?.scope.installId, contextId = snapshot?.scope.contextId;
-  const scope = useMemo(() => installId === undefined || contextId === undefined ? null : { installId, contextId }, [installId, contextId]);
+  const installId = snapshot?.scope.installId, digest = snapshot?.digest;
+  const scope = useMemo(() => installId === undefined || digest === undefined ? null : { installId, digest }, [installId, digest]);
+  // No host push within the window: say the host is unreachable instead of waiting forever.
+  useEffect(() => { const t = setTimeout(markUnreachable, 15000); return () => clearTimeout(t); }, []);
   // Per-install copilot preference; kept in state so the section and the Inbox agree.
   const [prefs, setPrefs] = useState<Record<string, CopilotMode>>({});
   if (!snapshot || !scope) return scopeError() ? <ErrorNotice>{scopeError()}</ErrorNotice> : <Loading>Waiting for the verified WhatsApp mount…</Loading>;
@@ -32,7 +34,7 @@ export default function WabaScreen() {
   const copilot = mode === "copilot" && can("whatsapp.draft.show");
   const handoff = { set: can("whatsapp.handoff.set"), release: can("whatsapp.handoff.release") };
   const assist = { show: copilot, brief: copilot && can("chat.whatsapp.brief"), open: copilot && can("chat.whatsapp.open"), discard: copilot && can("whatsapp.draft.discard") };
-  return <main className="app-outlet waba" key={`${scope.installId}:${scope.contextId}:${snapshot.digest}`}>
+  return <main className="app-outlet waba" key={`${scope.installId}:${snapshot.digest}`}>
     {route.section === "connection" ? <Connection scope={scope} canConnect={viewer.canConnect} />
       : route.section === "templates" ? <Templates scope={scope} canSend={viewer.canTemplate} routeId={route.record_id} recipient={recipient} onRecipient={setRecipient} />
       : route.section === "ai" ? <AiAgent installId={scope.installId} mode={mode} persisted={stored.persisted} onMode={m => setPrefs(p => ({ ...p, [scope.installId]: m }))} />
