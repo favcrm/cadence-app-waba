@@ -242,7 +242,7 @@ function Composer({ scope, conversationId, handoffAt, freeformUntil, open, autoT
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState<Attempt | null>(null);
-  useEffect(() => { onDirtyChange(!!text || busy || !!attempt && !["sent", "failed", "refused", "cancelled"].includes(attempt.state)); }, [text, busy, attempt, onDirtyChange]);
+  useEffect(() => { onDirtyChange(!!text || busy || !!attempt && !["sent", "accepted", "failed", "refused", "cancelled"].includes(attempt.state)); }, [text, busy, attempt, onDirtyChange]);
   useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
   // Insert only fills the text for editing; nothing is prepared until Send…
   useEffect(() => { if (inserted) setText(inserted.text); }, [inserted]);
@@ -254,8 +254,8 @@ function Composer({ scope, conversationId, handoffAt, freeformUntil, open, autoT
       const done = await serviceSlot(scope, "whatsapp.reply.send", { conversation_id: conversationId, text: frozen.text, effect_id: frozen.effectId });
       const state = sendState(done);
       setAttempt({ ...frozen, state });
-      if (state === "sent" || state === "uncertain") setText("");
-      if (state === "sent") onSent();
+      if (state === "sent" || state === "accepted" || state === "uncertain") setText("");
+      if (state === "sent" || state === "accepted") onSent();
     } catch (e) {
       // A refused card may be a cancel or a host refusal: the host record decides.
       await check(frozen, e);
@@ -271,7 +271,7 @@ function Composer({ scope, conversationId, handoffAt, freeformUntil, open, autoT
       setAttempt(cancelled ? { ...frozen, state: "cancelled", reason: declinedReason(refusal).cancelled ? null : declinedReason(refusal).text } : { ...frozen, state: "status", status });
       // Anything that may have left the host is never offered for resend.
       if (!cancelled && !["prepared", "failed", "refused"].includes(status.state)) setText("");
-      if (status.state === "sent") onSent();
+      if (status.state === "sent" || status.state === "accepted") onSent();
     } catch { setAttempt({ ...frozen, state: "uncertain" }); setText(""); }
   }
   async function send() {
@@ -295,7 +295,7 @@ function Composer({ scope, conversationId, handoffAt, freeformUntil, open, autoT
   }
   // While an attempt's outcome is open, the composer is locked so the same
   // reply is never sent twice. The outcome stays visible if the window closes.
-  const locked = !!attempt && !["sent", "failed", "refused", "cancelled"].includes(attempt.state);
+  const locked = !!attempt && !["sent", "accepted", "failed", "refused", "cancelled"].includes(attempt.state);
   const outcome = attempt && <Outcome attempt={attempt} linked={scope.provider === "linked"} onCheck={() => { void check(attempt); }} onApproveAgain={() => { void approve(attempt); }} onDismiss={() => setAttempt(null)} />;
   if (!open) return <div className="waba-composer">{outcome}<Notice state="window-closed">The 24-hour reply window is closed, so free text can&apos;t be sent to this customer. An approved template can still be sent.</Notice></div>;
   return <form className="waba-composer" onSubmit={e => { e.preventDefault(); void send(); }}>
@@ -314,12 +314,13 @@ function Outcome({ attempt, linked, onCheck, onApproveAgain, onDismiss }: { atte
     case "approving": return <Notice state="approving">Waiting for your approval in the Cadence card…</Notice>;
     case "checking": return <Loading>Reading this reply&apos;s recorded status…</Loading>;
     case "sent": return <Notice state="sent">{linked ? "Delivery confirmed." : "Sent: FavCRM accepted the reply. Delivery shows on the message once WhatsApp reports it."} <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></Notice>;
+    case "accepted": return <Notice state="sent">{linked ? "WhatsApp accepted this message; recipient delivery is not confirmed." : "The provider accepted this message; recipient delivery is not confirmed."} <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></Notice>;
     case "failed": return <ErrorNotice>{linked ? "The linked device did not dispatch this reply." : "Failed: FavCRM did not send this reply."} Your text is still in the composer. <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></ErrorNotice>;
     case "refused": return <ErrorNotice>Refused: the reply was not sent (for example the window closed or the approval was declined). <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></ErrorNotice>;
     case "cancelled": return <Notice state="cancelled">{attempt.reason ? `Not sent: ${attempt.reason}` : "Not sent: the approval was cancelled."} <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></Notice>;
     case "pending": return <Notice state="pending">Waiting for the owner&apos;s approval in AgenticOS. Nothing has been sent. Once it is approved, confirm the same reply again.{quote}
       <Button size="sm" onClick={onApproveAgain}>Confirm this reply again</Button></Notice>;
-    case "status": return <Notice state={`status-${attempt.status.state}`}>Recorded status: <strong>{attempt.status.state}</strong>{attempt.status.door ? ` (door: ${attempt.status.door})` : ""}. {linked ? "Verify with the recipient before sending again." : "Check the messages above; this reply is never resent automatically."}{quote}
+    case "status": return <Notice state={`status-${attempt.status.state}`}>Recorded status: <strong>{attempt.status.state}</strong>{attempt.status.door ? ` (door: ${attempt.status.door})` : ""}. {linked && attempt.status.state === "accepted" ? "WhatsApp accepted the message; recipient delivery is not confirmed." : linked ? "Verify with the recipient before sending again." : "Check the messages above; this reply is never resent automatically."}{quote}
       <Button size="sm" onClick={onCheck}>Check again</Button> <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></Notice>;
     default: return <ErrorNotice>Uncertain: Cadence can&apos;t tell whether this reply was sent, so it will never be resent. {linked ? "Check its status and verify with the recipient before sending again." : "Check its status and the messages above before replying again."}{quote}
       <Button size="sm" onClick={onCheck}>Check status</Button></ErrorNotice>;

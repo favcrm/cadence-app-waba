@@ -15,7 +15,7 @@ export interface Conversation extends ConversationRow { status: string | null; l
 export interface Message { id: string; direction: string | null; body: string | null; status: string | null; senderType: string | null; createdAt: string | null; type: string | null }
 export interface Page<T> { rows: T[]; cursor: string | null }
 /** The host's reply states; anything else reads as uncertain. */
-export type ReplyState = "sent" | "pending" | "failed" | "refused" | "uncertain";
+export type ReplyState = "sent" | "accepted" | "pending" | "failed" | "refused" | "uncertain";
 export interface Prepared { effect_id: string; decision: string | null; expires_at: string | null }
 export interface ReplyStatus { state: string; door: string | null }
 
@@ -77,7 +77,7 @@ export function parsePrepared(v: unknown): Prepared {
 /** A send answer. Fails closed: only an explicit known state is taken. */
 export function sendState(v: unknown): ReplyState {
   const s = obj(v) && obj(v.reply) ? v.reply.state : null;
-  return s === "sent" || s === "pending" || s === "failed" || s === "refused" ? s : "uncertain";
+  return s === "sent" || s === "accepted" || s === "pending" || s === "failed" || s === "refused" ? s : "uncertain";
 }
 export function parseReplyStatus(v: unknown): ReplyStatus {
   if (!obj(v) || typeof v.state !== "string") bad();
