@@ -64,9 +64,9 @@ cadence app catalog approve INSTALL_ID --digest BUNDLE_DIGEST
   through the host-drawn approval card over that exact text. An
   `uncertain` reply is never resent; its recorded status can be read.
   When the official connection's 24-hour window is closed, free text
-  cannot be sent. Linked-device transport completion is uncertain until
-  an authenticated delivery receipt is available; never retry an uncertain
-  send automatically.
+  cannot be sent. A linked-device reply is accepted only when the exact
+  WhatsApp server ACK is recorded; acceptance does not confirm delivery.
+  Never retry an uncertain send automatically.
 - **Templates.** The templates FavCRM holds, with status, revision and
   variables. "Use in conversation" picks a conversation (kept while you
   move between pages) and sends an approved template through the
