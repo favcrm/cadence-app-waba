@@ -2,7 +2,7 @@ import { ApiError } from "@cadence/screen-ui";
 import { useEffect,useRef,useSyncExternalStore } from "react";
 import { exact } from "./channel";
 import { OPERATIONS,type Section } from "./services";
-export interface DisplayScope { installId: string; digest: string }
+export interface DisplayScope { installId: string; digest: string; provider?: "linked" }
 export interface Route { section: Section; view: "list" | "new"; record_id: string | null; segment_id: string | null }
 export interface ScopeSnapshot { scope: DisplayScope; digest: string; actions: string[]; route: Route }
 let snapshot: ScopeSnapshot | null = null;

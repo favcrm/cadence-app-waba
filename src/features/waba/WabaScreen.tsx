@@ -1,4 +1,4 @@
-import { ErrorNotice,Loading } from "@cadence/screen-ui";
+import { ErrorNotice,Loading,Notice } from "@cadence/screen-ui";
 import { useEffect,useMemo,useState } from "react";
 import { markUnreachable,scopeError,useScope } from "../../bridge/scope";
 import Broadcasts from "./Broadcasts";
@@ -13,10 +13,12 @@ export default function WabaScreen() {
   // The template recipient outlives a section switch: the host re-pushes the
   // route into this frame, and the host's nav links drop the record id.
   const [recipient, setRecipient] = useState<Recipient | null>(null);
+  const [provider, setProvider] = useState<"official" | "linked">("official");
+  const [replyDirty, setReplyDirty] = useState(false);
   // The host re-pushes the scope every few seconds as a new object; pages key
   // their reads on this stable one, so a push never resets loaded data or forms.
   const installId = snapshot?.scope.installId, digest = snapshot?.digest;
-  const scope = useMemo(() => installId === undefined || digest === undefined ? null : { installId, digest }, [installId, digest]);
+  const scope = useMemo(() => installId === undefined || digest === undefined ? null : { installId, digest, ...(provider === "linked" ? { provider: "linked" as const } : {}) }, [installId, digest, provider]);
   // No host push within the window: say the host is unreachable instead of waiting forever.
   useEffect(() => { const t = setTimeout(markUnreachable, 15000); return () => clearTimeout(t); }, []);
   // Per-install copilot preference; kept in state so the section and the Inbox agree.
@@ -26,19 +28,28 @@ export default function WabaScreen() {
   // Display affordances only, derived from the host-granted actions (members
   // get the reads); the host independently refuses every write it did not grant.
   const can = (...verbs: string[]) => verbs.every(v => actions.includes(v));
-  const viewer = { canConnect: can("whatsapp.connect_session"), canReply: can("whatsapp.reply.prepare", "whatsapp.reply.send"), canTemplate: can("whatsapp.template.prepare", "whatsapp.template.send") };
+  const linked = provider === "linked";
+  const viewer = { canConnect: can("whatsapp.connect_session"), canReply: can("whatsapp.reply.prepare", "whatsapp.reply.send"), canTemplate: !linked && can("whatsapp.template.prepare", "whatsapp.template.send") };
   const rights = { draft: can("whatsapp.broadcast.draft"), estimate: can("whatsapp.broadcast.estimate"), test: can("whatsapp.broadcast.test.prepare", "whatsapp.broadcast.test.send"), send: can("whatsapp.broadcast.prepare", "whatsapp.broadcast.send"), stop: can("whatsapp.broadcast.stop") };
   const stored = readMode(scope.installId);
   const mode = prefs[scope.installId] ?? stored.mode;
   // The copilot is offered only in copilot mode and only where the host granted its reads.
-  const copilot = mode === "copilot" && can("whatsapp.draft.show");
-  const handoff = { set: can("whatsapp.handoff.set"), release: can("whatsapp.handoff.release") };
+  const copilot = !linked && mode === "copilot" && can("whatsapp.draft.show");
+  const handoff = { set: !linked && can("whatsapp.handoff.set"), release: !linked && can("whatsapp.handoff.release") };
   const assist = { show: copilot, brief: copilot && can("chat.whatsapp.brief"), open: copilot && can("chat.whatsapp.open"), discard: copilot && can("whatsapp.draft.discard") };
   return <main className="app-outlet waba" key={`${scope.installId}:${snapshot.digest}`}>
-    {route.section === "connection" ? <Connection scope={scope} canConnect={viewer.canConnect} />
+    <fieldset className="waba-provider" aria-describedby={replyDirty ? "waba-provider-draft" : undefined}>
+      <legend>WhatsApp connection</legend>
+      <label><input type="radio" name="waba-provider" value="official" checked={!linked} disabled={replyDirty} onChange={() => setProvider("official")} /> Official API (FavCRM)</label>
+      <label><input type="radio" name="waba-provider" value="linked" checked={linked} disabled={replyDirty} onChange={() => setProvider("linked")} /> Linked device</label>
+    </fieldset>
+    {replyDirty && <p id="waba-provider-draft" className="waba-muted">Finish the reply or check and dismiss its status before switching connections.</p>}
+    {linked && <Notice>Test accounts only: a crash can currently lose incoming test messages. Do not use this connection for production traffic.</Notice>}
+    {route.section === "connection" ? <Connection key={provider} scope={scope} canConnect={viewer.canConnect} />
+      : linked && route.section !== "inbox" ? <Notice state="read-only">Templates, broadcasts and the AI agent are available with the official API connection.</Notice>
       : route.section === "templates" ? <Templates scope={scope} canSend={viewer.canTemplate} routeId={route.record_id} recipient={recipient} onRecipient={setRecipient} />
       : route.section === "ai" ? <AiAgent installId={scope.installId} mode={mode} persisted={stored.persisted} onMode={m => setPrefs(p => ({ ...p, [scope.installId]: m }))} />
       : route.section === "broadcasts" ? <Broadcasts scope={scope} rights={rights} routeId={route.record_id} creating={route.view === "new"} />
-      : <Inbox scope={scope} canReply={viewer.canReply} canTemplate={viewer.canTemplate} assist={assist} handoff={handoff} routeId={route.record_id} onRecipient={setRecipient} />}
+      : <Inbox key={provider} scope={scope} canReply={viewer.canReply} canTemplate={viewer.canTemplate} assist={assist} handoff={handoff} routeId={linked ? null : route.record_id} onRecipient={setRecipient} replyDirty={replyDirty} onDirtyChange={setReplyDirty} />}
   </main>;
 }

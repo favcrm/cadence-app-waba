@@ -71,6 +71,14 @@ export const SLOT_FIELDS: Record<keyof SlotArgs, readonly string[]> = {
   "whatsapp.handoff.release": ["conversation_id"],
 };
 export const OPERATIONS = [...Object.keys(CALL_FIELDS), ...Object.keys(SLOT_FIELDS)];
+const LINKED_CALLS = new Set(["whatsapp.status", "whatsapp.connect_session", "whatsapp.conversations.list", "whatsapp.conversations.show", "whatsapp.messages", "whatsapp.reply.prepare", "whatsapp.reply.status"]);
+const LINKED_SLOTS = new Set(["whatsapp.reply.send"]);
+function providerArgs(scope: DisplayScope, verb: string, args: Bag, slot: boolean): Bag {
+  const clean = cleanArgs(verb, args, slot);
+  if (scope.provider !== "linked") return clean;
+  if (!(slot ? LINKED_SLOTS : LINKED_CALLS).has(verb)) throw new ApiError("This operation is not available for linked devices.", 400);
+  return { ...clean, provider: "linked" };
+}
 export function cleanArgs(verb: string, args: Bag, slot: boolean): Bag {
   const fields = (slot ? SLOT_FIELDS : CALL_FIELDS)[verb as never] as readonly string[] | undefined;
   if (!fields || !args || typeof args !== "object" || Array.isArray(args)) throw new ApiError("Unlisted WhatsApp operation", 400);
@@ -83,9 +91,9 @@ export function cleanArgs(verb: string, args: Bag, slot: boolean): Bag {
 }
 export async function serviceCall<T = unknown, K extends keyof CallArgs = keyof CallArgs>(scope: DisplayScope, verb: K, args: CallArgs[K]): Promise<T> {
   assertCurrentScope(scope); requireOperation(verb);
-  return await channel.request("call", verb, cleanArgs(verb, args as Bag, false)) as T;
+  return await channel.request("call", verb, providerArgs(scope, verb, args as Bag, false)) as T;
 }
 export async function serviceSlot<T = unknown, K extends keyof SlotArgs = keyof SlotArgs>(scope: DisplayScope, verb: K, args: SlotArgs[K]): Promise<T> {
   assertCurrentScope(scope); requireOperation(verb);
-  return await channel.request("slot", verb, cleanArgs(verb, args as Bag, true)) as T;
+  return await channel.request("slot", verb, providerArgs(scope, verb, args as Bag, true)) as T;
 }

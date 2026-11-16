@@ -14,13 +14,14 @@ export interface Handoff { set: boolean; release: boolean }
 const DRAFT_POLL_MS = 5000;
 type Load<T> = { state: "loading" } | { state: "ok"; value: T } | { state: "failed"; text: string };
 
-export default function Inbox({ scope, canReply, canTemplate, assist, handoff, routeId: routed, onRecipient }: { scope: DisplayScope; canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; routeId: string | null; onRecipient: (r: Recipient) => void }) {
+export default function Inbox({ scope, canReply, canTemplate, assist, handoff, routeId: routed, onRecipient, replyDirty, onDirtyChange }: { scope: DisplayScope; canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; routeId: string | null; onRecipient: (r: Recipient) => void; replyDirty: boolean; onDirtyChange: (dirty: boolean) => void }) {
   const [rows, setRows] = useState<ConversationRow[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [list, setList] = useState<"loading" | "ok" | "more" | string>("loading");
   const [filter, setFilter] = useState("");
   // Ids outside the host route grammar stay a local selection.
   const [local, setLocal] = useState<string | null>(null);
+  const [newMessage, setNewMessage] = useState(false);
   const selected = routed ?? local;
   // `quiet` is a host-push refresh: no loading state, loaded pages kept, errors
   // leave what is shown in place.
@@ -36,39 +37,63 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
   useEffect(() => { void page(null); }, [page]);
   useOnPush(() => page(null, true));
   function select(id: string | null) {
+    setNewMessage(false);
     if (id === null || routable(id)) { setLocal(null); void patchRoute({ section: "inbox", view: "list", record_id: id }).catch(() => undefined); }
     else { setLocal(id); void patchRoute({ section: "inbox", view: "list", record_id: null }).catch(() => undefined); }
   }
   const needle = filter.trim().toLowerCase();
-  const shown = needle ? rows.filter(r => [r.contact.name, r.contact.phone, r.lastMessage?.body].some(v => v?.toLowerCase().includes(needle))) : rows;
+  const shown = needle ? rows.filter(r => [r.contact.name, r.contact.phone, r.lastMessage?.body, ...(scope.provider === "linked" ? [r.conversationId] : [])].some(v => v?.toLowerCase().includes(needle))) : rows;
   const failed = list !== "loading" && list !== "ok" && list !== "more";
-  return <section className="waba-page waba-inbox" data-selected={selected ? "yes" : "no"} aria-label="Inbox">
+  return <section className="waba-page waba-inbox" data-selected={newMessage || selected ? "yes" : "no"} aria-label="Inbox">
     <div className="waba-list" aria-labelledby="waba-inbox-title">
       <header className="waba-head">
         <h1 id="waba-inbox-title">Inbox</h1>
         <Button size="sm" onClick={() => { void page(null); }} loading={list === "loading"}>Refresh</Button>
+        {scope.provider === "linked" && canReply && <Button size="sm" disabled={replyDirty} onClick={() => { setLocal(null); setNewMessage(true); }}>New message</Button>}
       </header>
       <Field label="Filter loaded conversations">{c => <input {...c} className="field" type="search" value={filter} onChange={e => setFilter(e.target.value)} />}</Field>
       {list === "loading" && !rows.length ? <Loading>Reading conversations…</Loading>
         : failed ? <ErrorNotice onRetry={() => { void page(null); }}>{list}</ErrorNotice>
         : !shown.length ? <EmptyState title={needle ? "No loaded conversation matches" : "No conversations yet"} name="conversations">{needle ? "Load more or clear the filter." : "New WhatsApp conversations appear here after a refresh."}</EmptyState>
         : <ul className="waba-rows">{shown.map(r => <li key={r.conversationId}>
-            <button type="button" className="waba-row" aria-current={r.conversationId === selected ? "true" : undefined} onClick={() => select(r.conversationId)}>
-              <span className="waba-row-name">{r.contact.name ?? r.contact.phone ?? "Unknown contact"}{r.unreadCount ? <span className="waba-badge" aria-label={`${r.unreadCount} unread`}>{r.unreadCount}</span> : null}</span>
+            <button type="button" className="waba-row" disabled={replyDirty} aria-current={r.conversationId === selected ? "true" : undefined} onClick={() => select(r.conversationId)}>
+              <span className="waba-row-name">{r.contact.name ?? r.contact.phone ?? (scope.provider === "linked" ? r.conversationId : "Unknown contact")}{r.unreadCount ? <span className="waba-badge" aria-label={`${r.unreadCount} unread`}>{r.unreadCount}</span> : null}</span>
               <span className="waba-row-last">{r.lastMessage?.direction === "outbound" ? "You: " : ""}{r.lastMessage?.body ?? ""}</span>
-              <span className="waba-muted">{when(r.lastMessage?.createdAt ?? null)}{windowOpen(r) ? "" : " · window closed"}</span>
+              <span className="waba-muted">{when(r.lastMessage?.createdAt ?? null)}{scope.provider === "linked" || windowOpen(r) ? "" : " · window closed"}</span>
             </button>
           </li>)}</ul>}
       {cursor && !failed && <Button size="sm" onClick={() => { void page(cursor); }} loading={list === "more"}>Load more</Button>}
     </div>
     <div className="waba-thread">
-      {selected ? <Thread key={selected} scope={scope} id={selected} canReply={canReply} canTemplate={canTemplate} assist={assist} handoff={handoff} onRecipient={onRecipient} onBack={() => select(null)} />
+      {newMessage ? <NewLinkedReply scope={scope} dirty={replyDirty} onDirtyChange={onDirtyChange} onBack={() => setNewMessage(false)} onChanged={() => { void page(null, true); }} />
+        : selected ? <Thread key={selected} scope={scope} id={selected} canReply={canReply} canTemplate={canTemplate} assist={assist} handoff={handoff} onRecipient={onRecipient} onDirtyChange={onDirtyChange} onBack={() => select(null)} />
         : <EmptyState title="Select a conversation" name="thread">Messages and the reply composer appear here.</EmptyState>}
     </div>
   </section>;
 }
 
-function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient, onBack }: { scope: DisplayScope; id: string; canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; onRecipient: (r: Recipient) => void; onBack: () => void }) {
+function NewLinkedReply({ scope, dirty, onDirtyChange, onBack, onChanged }: { scope: DisplayScope; dirty: boolean; onDirtyChange: (dirty: boolean) => void; onBack: () => void; onChanged: () => void }) {
+  const [phone, setPhone] = useState("");
+  const [target, setTarget] = useState<string | null>(null);
+  return <article className="waba-card" aria-labelledby="waba-new-message-title">
+    <header className="waba-head">
+      <Button size="sm" variant="ghost" disabled={dirty} onClick={onBack}>Back</Button>
+      <h2 id="waba-new-message-title">New linked-device message</h2>
+    </header>
+    {target === null ? <form className="waba-composer" onSubmit={e => { e.preventDefault(); if (/^\+[1-9]\d{7,14}$/.test(phone)) setTarget(`${phone.slice(1)}@s.whatsapp.net`); }}>
+      <Field label="Recipient phone number" hint="Use international format, including + and country code.">
+        {c => <input {...c} className="field" type="tel" autoComplete="tel" required pattern="\+[1-9][0-9]{7,14}" value={phone} onChange={e => setPhone(e.target.value)} />}
+      </Field>
+      <Button type="submit" variant="primary">Continue</Button>
+    </form> : <>
+      <p>To: <strong>{phone}</strong></p>
+      <Button size="sm" variant="ghost" disabled={dirty} onClick={() => setTarget(null)}>Change number</Button>
+      <Composer scope={scope} conversationId={target} handoffAt={null} freeformUntil={null} open autoTakeover={false} inserted={null} onSent={onChanged} onChanged={onChanged} onDirtyChange={onDirtyChange} />
+    </>}
+  </article>;
+}
+
+function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient, onDirtyChange, onBack }: { scope: DisplayScope; id: string; canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; onRecipient: (r: Recipient) => void; onDirtyChange: (dirty: boolean) => void; onBack: () => void }) {
   const [conversation, setConversation] = useState<Load<Conversation>>({ state: "loading" });
   const [messages, setMessages] = useState<Load<{ rows: Message[]; cursor: string | null }>>({ state: "loading" });
   // `quiet` is a host-push refresh: shown data stays on a failed read, and
@@ -114,7 +139,7 @@ function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient
   return <article className="waba-card waba-conversation" aria-labelledby="waba-thread-title">
     <header className="waba-head">
       <Button size="sm" variant="ghost" className="waba-back" onClick={onBack}>Back</Button>
-      <h2 id="waba-thread-title">{c ? c.contact.name ?? c.contact.phone ?? "Unknown contact" : "Conversation"}</h2>
+      <h2 id="waba-thread-title">{c ? c.contact.name ?? c.contact.phone ?? (scope.provider === "linked" ? c.conversationId : "Unknown contact") : "Conversation"}</h2>
       <Button size="sm" onClick={reload}>Refresh</Button>
     </header>
     {c && <TakeoverBar scope={scope} id={id} handoffAt={c.handoffAt} rights={handoff} onChanged={() => { void show(); }} />}
@@ -122,7 +147,7 @@ function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient
     {draft && <DraftChip draft={draft} canInsert={canReply && !!c && windowOpen(c)} canDiscard={assist.discard} note={assistNote} onInsert={() => setInserted(i => ({ text: draft.text, n: (i?.n ?? 0) + 1 }))} onDiscard={() => { void discard(); }} />}
     {conversation.state === "loading" ? <Loading>Reading the conversation…</Loading>
       : conversation.state === "failed" ? <ErrorNotice onRetry={() => { void show(); }}>{conversation.text}</ErrorNotice>
-      : <p className="waba-muted">{c!.contact.phone ?? ""}{c!.status ? ` · ${c!.status}` : ""} · last inbound {when(c!.lastInboundAt)}</p>}
+      : scope.provider !== "linked" && <p className="waba-muted">{c!.contact.phone ?? ""}{c!.status ? ` · ${c!.status}` : ""} · last inbound {when(c!.lastInboundAt)}</p>}
     {messages.state === "loading" ? <Loading>Reading messages…</Loading>
       : messages.state === "failed" ? <ErrorNotice onRetry={() => { void read(); }}>{messages.text}</ErrorNotice>
       : <>
@@ -133,7 +158,7 @@ function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient
             <span className="waba-muted">{when(m.createdAt)}{m.status ? ` · ${m.status}` : ""}</span>
           </li>)}</ol>}
       </>}
-    {c && (canReply ? <Composer scope={scope} conversation={c} autoTakeover={handoff.set} inserted={inserted} onSent={onSent} onChanged={reload} />
+    {c && (canReply ? <Composer scope={scope} conversationId={c.conversationId} handoffAt={c.handoffAt} freeformUntil={c.freeformUntil} open={scope.provider === "linked" || windowOpen(c)} autoTakeover={handoff.set} inserted={inserted} onSent={onSent} onChanged={reload} onDirtyChange={onDirtyChange} />
       : <Notice state="read-only">You can read this inbox. Only the workspace operator can reply.</Notice>)}
     {c && canTemplate && <Button size="sm" onClick={() => { onRecipient(c); void patchRoute({ section: "templates", view: "list", record_id: null }).catch(() => undefined); }}>Send an approved template…</Button>}
   </article>;
@@ -212,12 +237,13 @@ function TakeoverBar({ scope, id, handoffAt, rights, onChanged }: { scope: Displ
  *  approval SLOT over exactly the prepared text. Nothing is retried. */
 type Attempt = { text: string; effectId: string } & ({ state: "approving" } | { state: ReplyState } | { state: "checking" } | { state: "status"; status: ReplyStatus } | { state: "cancelled"; reason: string | null });
 
-function Composer({ scope, conversation, autoTakeover, inserted, onSent, onChanged }: { scope: DisplayScope; conversation: Conversation; autoTakeover: boolean; inserted: { text: string; n: number } | null; onSent: () => void; onChanged: () => void }) {
+function Composer({ scope, conversationId, handoffAt, freeformUntil, open, autoTakeover, inserted, onSent, onChanged, onDirtyChange }: { scope: DisplayScope; conversationId: string; handoffAt: string | null; freeformUntil: string | null; open: boolean; autoTakeover: boolean; inserted: { text: string; n: number } | null; onSent: () => void; onChanged: () => void; onDirtyChange: (dirty: boolean) => void }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState<Attempt | null>(null);
-  const open = windowOpen(conversation);
+  useEffect(() => { onDirtyChange(!!text || busy || !!attempt && !["sent", "failed", "refused", "cancelled"].includes(attempt.state)); }, [text, busy, attempt, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
   // Insert only fills the text for editing; nothing is prepared until Send…
   useEffect(() => { if (inserted) setText(inserted.text); }, [inserted]);
   async function approve(frozen: { text: string; effectId: string }) {
@@ -225,7 +251,7 @@ function Composer({ scope, conversation, autoTakeover, inserted, onSent, onChang
     try {
       // The SLOT carries the exact prepared text; the host recomputes the
       // digest and refuses any difference.
-      const done = await serviceSlot(scope, "whatsapp.reply.send", { conversation_id: conversation.conversationId, text: frozen.text, effect_id: frozen.effectId });
+      const done = await serviceSlot(scope, "whatsapp.reply.send", { conversation_id: conversationId, text: frozen.text, effect_id: frozen.effectId });
       const state = sendState(done);
       setAttempt({ ...frozen, state });
       if (state === "sent" || state === "uncertain") setText("");
@@ -254,12 +280,12 @@ function Composer({ scope, conversation, autoTakeover, inserted, onSent, onChang
     setBusy(true); setError(null); setAttempt(null);
     try {
       // Replying by hand pauses FavCRM's AI first. If that fails nothing is prepared.
-      if (autoTakeover && !conversation.handoffAt) {
-        try { await serviceCall(scope, "whatsapp.handoff.set", { conversation_id: conversation.conversationId }); }
+      if (autoTakeover && !handoffAt) {
+        try { await serviceCall(scope, "whatsapp.handoff.set", { conversation_id: conversationId }); }
         catch (e) { setError(`Nothing was prepared: FavCRM's AI could not be paused. ${errorText(e, "The takeover was refused.")}`); onChanged(); return; }
         onChanged();
       }
-      const prepared = parsePrepared(await serviceCall(scope, "whatsapp.reply.prepare", { conversation_id: conversation.conversationId, text: frozen }));
+      const prepared = parsePrepared(await serviceCall(scope, "whatsapp.reply.prepare", { conversation_id: conversationId, text: frozen }));
       await approve({ text: frozen, effectId: prepared.effect_id });
     } catch (e) {
       // Refusal codes are generic here; the re-read shows a closed window.
@@ -270,32 +296,32 @@ function Composer({ scope, conversation, autoTakeover, inserted, onSent, onChang
   // While an attempt's outcome is open, the composer is locked so the same
   // reply is never sent twice. The outcome stays visible if the window closes.
   const locked = !!attempt && !["sent", "failed", "refused", "cancelled"].includes(attempt.state);
-  const outcome = attempt && <Outcome attempt={attempt} onCheck={() => { void check(attempt); }} onApproveAgain={() => { void approve(attempt); }} onDismiss={() => setAttempt(null)} />;
+  const outcome = attempt && <Outcome attempt={attempt} linked={scope.provider === "linked"} onCheck={() => { void check(attempt); }} onApproveAgain={() => { void approve(attempt); }} onDismiss={() => setAttempt(null)} />;
   if (!open) return <div className="waba-composer">{outcome}<Notice state="window-closed">The 24-hour reply window is closed, so free text can&apos;t be sent to this customer. An approved template can still be sent.</Notice></div>;
   return <form className="waba-composer" onSubmit={e => { e.preventDefault(); void send(); }}>
     {outcome}
     {error && <ErrorNotice bare>{error}</ErrorNotice>}
-    <Field label="Reply" hint={`Window open until ${when(conversation.freeformUntil)}. You approve the exact text before it is sent.`}>
+    <Field label="Reply" hint={scope.provider === "linked" ? "You approve the exact recipient and text before it is sent." : `Window open until ${when(freeformUntil)}. You approve the exact text before it is sent.`}>
       {c => <textarea {...c} className="field" rows={3} maxLength={4096} value={text} disabled={busy || locked} onChange={e => setText(e.target.value)} />}
     </Field>
     <Button type="submit" variant="primary" loading={busy} disabled={locked || !text.trim()}>Send…</Button>
   </form>;
 }
 
-function Outcome({ attempt, onCheck, onApproveAgain, onDismiss }: { attempt: Attempt; onCheck: () => void; onApproveAgain: () => void; onDismiss: () => void }) {
+function Outcome({ attempt, linked, onCheck, onApproveAgain, onDismiss }: { attempt: Attempt; linked: boolean; onCheck: () => void; onApproveAgain: () => void; onDismiss: () => void }) {
   const quote = <blockquote className="waba-quote">{attempt.text}</blockquote>;
   switch (attempt.state) {
     case "approving": return <Notice state="approving">Waiting for your approval in the Cadence card…</Notice>;
     case "checking": return <Loading>Reading this reply&apos;s recorded status…</Loading>;
-    case "sent": return <Notice state="sent">Sent: FavCRM accepted the reply. Delivery shows on the message once WhatsApp reports it. <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></Notice>;
-    case "failed": return <ErrorNotice>Failed: FavCRM did not send this reply. Your text is still in the composer. <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></ErrorNotice>;
+    case "sent": return <Notice state="sent">{linked ? "Delivery confirmed." : "Sent: FavCRM accepted the reply. Delivery shows on the message once WhatsApp reports it."} <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></Notice>;
+    case "failed": return <ErrorNotice>{linked ? "The linked device did not dispatch this reply." : "Failed: FavCRM did not send this reply."} Your text is still in the composer. <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></ErrorNotice>;
     case "refused": return <ErrorNotice>Refused: the reply was not sent (for example the window closed or the approval was declined). <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></ErrorNotice>;
     case "cancelled": return <Notice state="cancelled">{attempt.reason ? `Not sent: ${attempt.reason}` : "Not sent: the approval was cancelled."} <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></Notice>;
     case "pending": return <Notice state="pending">Waiting for the owner&apos;s approval in AgenticOS. Nothing has been sent. Once it is approved, confirm the same reply again.{quote}
       <Button size="sm" onClick={onApproveAgain}>Confirm this reply again</Button></Notice>;
-    case "status": return <Notice state={`status-${attempt.status.state}`}>Recorded status: <strong>{attempt.status.state}</strong>{attempt.status.door ? ` (door: ${attempt.status.door})` : ""}. Check the messages above; this reply is never resent automatically.{quote}
+    case "status": return <Notice state={`status-${attempt.status.state}`}>Recorded status: <strong>{attempt.status.state}</strong>{attempt.status.door ? ` (door: ${attempt.status.door})` : ""}. {linked ? "Verify with the recipient before sending again." : "Check the messages above; this reply is never resent automatically."}{quote}
       <Button size="sm" onClick={onCheck}>Check again</Button> <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></Notice>;
-    default: return <ErrorNotice>Uncertain: Cadence can&apos;t tell whether this reply was sent, so it will never be resent. Check its status and the messages above before replying again.{quote}
+    default: return <ErrorNotice>Uncertain: Cadence can&apos;t tell whether this reply was sent, so it will never be resent. {linked ? "Check its status and verify with the recipient before sending again." : "Check its status and the messages above before replying again."}{quote}
       <Button size="sm" onClick={onCheck}>Check status</Button></ErrorNotice>;
   }
 }

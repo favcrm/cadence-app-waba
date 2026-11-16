@@ -116,6 +116,7 @@ const REFUSALS: Record<string, string> = {
   facts_changed: "The takeover changed since this card opened. Check the conversation before trying again.",
   favcrm_unavailable: "FavCRM is not answering right now. Try again in a moment.",
   favcrm_not_bound: "This workspace is not connected to FavCRM. Connect it, then try again.",
+  not_granted: "Linked-device access is not enabled. Ask a platform administrator to grant access.",
   conversation_not_found: "FavCRM could not find this conversation. Refresh the Inbox.",
 };
 export function errorText(error: unknown, fallback: string): string {
