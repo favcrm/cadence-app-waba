@@ -23,7 +23,8 @@ listing:
   data:
     stores:
       - Assistant reply drafts and the AI agent mode you choose
-      - Official data stays in FavCRM; linked-device messages stay encrypted in the workspace account store
+      - Official data stays in FavCRM; linked-device message contents and identifiers are encrypted
+      - Linked-device activity timestamps are indexed locally in plaintext
     personal: true
 ---
 
