@@ -342,7 +342,7 @@ function Composer({ scope, conversationId, handoffAt, freeformUntil, open, autoT
   // While an attempt's outcome is open, the composer is locked so the same
   // reply is never sent twice. The outcome stays visible if the window closes.
   const locked = !!attempt && !["sent", "accepted", "failed", "refused", "cancelled"].includes(attempt.state);
-  const outcome = attempt && <Outcome attempt={attempt} linked={scope.provider === "linked"} onCheck={() => { void check(attempt, undefined, true); }} onApproveAgain={() => { void approve(attempt); }} onDismiss={() => setAttempt(null)} />;
+  const outcome = attempt && <Outcome attempt={attempt} linked={scope.provider === "linked"} group={conversationId.endsWith("@g.us")} onCheck={() => { void check(attempt, undefined, true); }} onApproveAgain={() => { void approve(attempt); }} onDismiss={() => setAttempt(null)} />;
   if (!open) return <div className="waba-composer">{outcome}<Notice state="window-closed">The 24-hour reply window is closed, so free text can&apos;t be sent to this customer. An approved template can still be sent.</Notice></div>;
   return <form className="waba-composer" onSubmit={e => { e.preventDefault(); void send(); }}>
     {outcome}
@@ -354,19 +354,20 @@ function Composer({ scope, conversationId, handoffAt, freeformUntil, open, autoT
   </form>;
 }
 
-function Outcome({ attempt, linked, onCheck, onApproveAgain, onDismiss }: { attempt: Attempt; linked: boolean; onCheck: () => void; onApproveAgain: () => void; onDismiss: () => void }) {
+function Outcome({ attempt, linked, group, onCheck, onApproveAgain, onDismiss }: { attempt: Attempt; linked: boolean; group: boolean; onCheck: () => void; onApproveAgain: () => void; onDismiss: () => void }) {
   const quote = <blockquote className="waba-quote">{attempt.text}</blockquote>;
+  const groupNote = "WhatsApp accepted this group message; group delivery confirmation is unavailable.";
   switch (attempt.state) {
     case "approving": return <Notice state="approving">Waiting for your approval in the Cadence card…</Notice>;
     case "checking": return <Loading>Reading this reply&apos;s recorded status…</Loading>;
-    case "sent": return <Notice state="sent">{linked ? "Delivery confirmed." : "Sent: FavCRM accepted the reply. Delivery shows on the message once WhatsApp reports it."} <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></Notice>;
-    case "accepted": return <Notice state="sent">{linked ? "WhatsApp accepted this message; recipient delivery is not confirmed." : "The provider accepted this message; recipient delivery is not confirmed."} {linked && <Button size="sm" onClick={onCheck}>Check delivery</Button>} <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></Notice>;
+    case "sent": return <Notice state="sent">{linked ? group ? groupNote : "Delivery confirmed." : "Sent: FavCRM accepted the reply. Delivery shows on the message once WhatsApp reports it."} <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></Notice>;
+    case "accepted": return <Notice state="sent">{linked ? group ? groupNote : "WhatsApp accepted this message; recipient delivery is not confirmed." : "The provider accepted this message; recipient delivery is not confirmed."} {linked && !group && <Button size="sm" onClick={onCheck}>Check delivery</Button>} <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></Notice>;
     case "failed": return <ErrorNotice>{linked ? "The linked device did not dispatch this reply." : "Failed: FavCRM did not send this reply."} Your text is still in the composer. <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></ErrorNotice>;
     case "refused": return <ErrorNotice>Refused: the reply was not sent (for example the window closed or the approval was declined). <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></ErrorNotice>;
     case "cancelled": return <Notice state="cancelled">{attempt.reason ? `Not sent: ${attempt.reason}` : "Not sent: the approval was cancelled."} <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></Notice>;
     case "pending": return <Notice state="pending">Waiting for the owner&apos;s approval in AgenticOS. Nothing has been sent. Once it is approved, confirm the same reply again.{quote}
       <Button size="sm" onClick={onApproveAgain}>Confirm this reply again</Button></Notice>;
-    case "status": return <Notice state={`status-${attempt.status.state}`}>Recorded status: <strong>{attempt.status.state}</strong>{attempt.status.door ? ` (door: ${attempt.status.door})` : ""}. {linked && attempt.status.state === "sent" ? "Delivery confirmed." : linked && attempt.status.state === "accepted" ? "WhatsApp accepted the message; recipient delivery is not confirmed." : linked ? "Verify with the recipient before sending again." : "Check the messages above; this reply is never resent automatically."}{quote}
+    case "status": return <Notice state={`status-${attempt.status.state}`}>Recorded status: <strong>{attempt.status.state}</strong>{attempt.status.door ? ` (door: ${attempt.status.door})` : ""}. {linked && group && ["sent", "accepted"].includes(attempt.status.state) ? "Group delivery confirmation is unavailable." : linked && attempt.status.state === "sent" ? "Delivery confirmed." : linked && attempt.status.state === "accepted" ? "WhatsApp accepted the message; recipient delivery is not confirmed." : linked ? "Verify with the recipient before sending again." : "Check the messages above; this reply is never resent automatically."}{quote}
       <Button size="sm" onClick={onCheck}>Check again</Button> <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></Notice>;
     default: return <ErrorNotice>Uncertain: Cadence can&apos;t tell whether this reply was sent, so it will never be resent. {linked ? "Check its status and verify with the recipient before sending again." : "Check its status and the messages above before replying again."}{quote}
       <Button size="sm" onClick={onCheck}>Check status</Button></ErrorNotice>;
