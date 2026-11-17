@@ -309,16 +309,16 @@ function Composer({ scope, conversationId, handoffAt, freeformUntil, open, autoT
     onChanged();
   }
   // `refusal` is what ended the card; with it, a still-prepared effect was not sent.
-  async function check(frozen: { text: string; effectId: string }, refusal?: unknown) {
+  async function check(frozen: { text: string; effectId: string }, refusal?: unknown, preserveDraft = false) {
     setAttempt({ ...frozen, state: "checking" });
     try {
       const status = parseReplyStatus(await serviceCall(scope, "whatsapp.reply.status", { effect_id: frozen.effectId }));
       const cancelled = refusal !== undefined && status.state === "prepared";
       setAttempt(cancelled ? { ...frozen, state: "cancelled", reason: declinedReason(refusal).cancelled ? null : declinedReason(refusal).text } : { ...frozen, state: "status", status });
       // Anything that may have left the host is never offered for resend.
-      if (!cancelled && !["prepared", "failed", "refused"].includes(status.state)) setText("");
+      if (!preserveDraft && !cancelled && !["prepared", "failed", "refused"].includes(status.state)) setText("");
       if (status.state === "sent" || status.state === "accepted") onSent();
-    } catch { setAttempt({ ...frozen, state: "uncertain" }); setText(""); }
+    } catch { setAttempt({ ...frozen, state: "uncertain" }); if (!preserveDraft) setText(""); }
   }
   async function send() {
     const frozen = text;
@@ -342,7 +342,7 @@ function Composer({ scope, conversationId, handoffAt, freeformUntil, open, autoT
   // While an attempt's outcome is open, the composer is locked so the same
   // reply is never sent twice. The outcome stays visible if the window closes.
   const locked = !!attempt && !["sent", "accepted", "failed", "refused", "cancelled"].includes(attempt.state);
-  const outcome = attempt && <Outcome attempt={attempt} linked={scope.provider === "linked"} onCheck={() => { void check(attempt); }} onApproveAgain={() => { void approve(attempt); }} onDismiss={() => setAttempt(null)} />;
+  const outcome = attempt && <Outcome attempt={attempt} linked={scope.provider === "linked"} onCheck={() => { void check(attempt, undefined, true); }} onApproveAgain={() => { void approve(attempt); }} onDismiss={() => setAttempt(null)} />;
   if (!open) return <div className="waba-composer">{outcome}<Notice state="window-closed">The 24-hour reply window is closed, so free text can&apos;t be sent to this customer. An approved template can still be sent.</Notice></div>;
   return <form className="waba-composer" onSubmit={e => { e.preventDefault(); void send(); }}>
     {outcome}
