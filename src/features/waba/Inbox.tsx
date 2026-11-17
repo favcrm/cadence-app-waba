@@ -1,5 +1,5 @@
-import { Button,EmptyState,ErrorNotice,Field,Loading,Notice } from "@cadence/screen-ui";
-import { useCallback,useEffect,useState } from "react";
+import { ApiError,Button,EmptyState,ErrorNotice,Field,Loading,Notice } from "@cadence/screen-ui";
+import { useCallback,useEffect,useRef,useState } from "react";
 import { patchRoute } from "../../bridge/route";
 import { routable,useOnPush,type DisplayScope } from "../../bridge/scope";
 import { serviceCall,serviceSlot } from "../../bridge/services";
@@ -14,10 +14,29 @@ export interface Handoff { set: boolean; release: boolean }
 const DRAFT_POLL_MS = 5000;
 type Load<T> = { state: "loading" } | { state: "ok"; value: T } | { state: "failed"; text: string };
 
+async function readWhileIndexing<T>(
+  read: () => Promise<T>,
+  current: () => boolean,
+  onIndexing: () => void,
+): Promise<T | undefined> {
+  while (current()) {
+    try { const result = await read(); return current() ? result : undefined; }
+    catch (error) {
+      if (!current()) return undefined;
+      if (!(error instanceof ApiError) || error.code !== "inbox_indexing") throw error;
+      onIndexing();
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+  return undefined;
+}
+
 export default function Inbox({ scope, canReply, canTemplate, assist, handoff, routeId: routed, onRecipient, replyDirty, onDirtyChange }: { scope: DisplayScope; canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; routeId: string | null; onRecipient: (r: Recipient) => void; replyDirty: boolean; onDirtyChange: (dirty: boolean) => void }) {
   const [rows, setRows] = useState<ConversationRow[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [list, setList] = useState<"loading" | "ok" | "more" | string>("loading");
+  const listRequest = useRef(0);
+  const foregroundList = useRef(false);
   const [filter, setFilter] = useState("");
   // Ids outside the host route grammar stay a local selection.
   const [local, setLocal] = useState<string | null>(null);
@@ -26,15 +45,23 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
   // `quiet` is a host-push refresh: no loading state, loaded pages kept, errors
   // leave what is shown in place.
   const page = useCallback(async (after: string | null, quiet = false) => {
-    if (!quiet) setList(after ? "more" : "loading");
+    if (quiet && foregroundList.current) return;
+    const request = ++listRequest.current;
+    if (!quiet) { foregroundList.current = true; setList(after ? "more" : "loading"); }
     try {
-      const got = parseConversations(await serviceCall(scope, "whatsapp.conversations.list", { limit: PAGE, ...(after ? { cursor: after } : {}) }));
+      const got = await readWhileIndexing(
+        async () => parseConversations(await serviceCall(scope, "whatsapp.conversations.list", { limit: PAGE, ...(after ? { cursor: after } : {}) })),
+        () => request === listRequest.current,
+        () => { if (!quiet) setList("indexing"); },
+      );
+      if (!got) return;
       setRows(r => after ? [...r, ...got.rows.filter(n => !r.some(o => o.conversationId === n.conversationId))]
         : quiet ? [...got.rows, ...r.filter(o => !got.rows.some(n => n.conversationId === o.conversationId))] : got.rows);
-      setCursor(c => quiet && c ? c : got.cursor); setList(l => l === "more" ? l : "ok");
-    } catch (e) { if (!quiet) setList(errorText(e, "The conversation list could not be read.")); }
+      setCursor(c => quiet && c ? c : got.cursor); setList("ok");
+    } catch (e) { if (request === listRequest.current && !quiet) setList(errorText(e, "The conversation list could not be read.")); }
+    finally { if (!quiet && request === listRequest.current) foregroundList.current = false; }
   }, [scope]);
-  useEffect(() => { void page(null); }, [page]);
+  useEffect(() => { void page(null); return () => { listRequest.current++; foregroundList.current = false; }; }, [page]);
   useOnPush(() => page(null, true));
   function select(id: string | null) {
     setNewMessage(false);
@@ -43,16 +70,17 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
   }
   const needle = filter.trim().toLowerCase();
   const shown = needle ? rows.filter(r => [r.contact.name, r.contact.phone, r.lastMessage?.body, ...(scope.provider === "linked" ? [r.conversationId] : [])].some(v => v?.toLowerCase().includes(needle))) : rows;
-  const failed = list !== "loading" && list !== "ok" && list !== "more";
+  const failed = list !== "loading" && list !== "indexing" && list !== "ok" && list !== "more";
   return <section className="waba-page waba-inbox" data-selected={newMessage || selected ? "yes" : "no"} aria-label="Inbox">
     <div className="waba-list" aria-labelledby="waba-inbox-title">
       <header className="waba-head">
         <h1 id="waba-inbox-title">Inbox</h1>
-        <Button size="sm" onClick={() => { void page(null); }} loading={list === "loading"}>Refresh</Button>
+        <Button size="sm" onClick={() => { void page(null); }} loading={list === "loading" || list === "indexing"}>Refresh</Button>
         {scope.provider === "linked" && canReply && <Button size="sm" disabled={replyDirty} onClick={() => { setLocal(null); setNewMessage(true); }}>New message</Button>}
       </header>
       <Field label="Filter loaded conversations">{c => <input {...c} className="field" type="search" value={filter} onChange={e => setFilter(e.target.value)} />}</Field>
-      {list === "loading" && !rows.length ? <Loading>Reading conversations…</Loading>
+      {list === "indexing" && rows.length > 0 && <p className="waba-muted" role="status">Indexing older conversations…</p>}
+      {(list === "loading" || list === "indexing") && !rows.length ? <Loading>{list === "indexing" ? "Indexing older conversations…" : "Reading conversations…"}</Loading>
         : failed ? <ErrorNotice onRetry={() => { void page(null); }}>{list}</ErrorNotice>
         : !shown.length ? <EmptyState title={needle ? "No loaded conversation matches" : "No conversations yet"} name="conversations">{needle ? "Load more or clear the filter." : "New WhatsApp conversations appear here after a refresh."}</EmptyState>
         : <ul className="waba-rows">{shown.map(r => <li key={r.conversationId}>
@@ -62,7 +90,7 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
               <span className="waba-muted">{when(r.lastMessage?.createdAt ?? null)}{scope.provider === "linked" || windowOpen(r) ? "" : " · window closed"}</span>
             </button>
           </li>)}</ul>}
-      {cursor && !failed && <Button size="sm" onClick={() => { void page(cursor); }} loading={list === "more"}>Load more</Button>}
+      {cursor && !failed && <Button size="sm" onClick={() => { void page(cursor); }} loading={list === "more" || list === "indexing"}>Load more</Button>}
     </div>
     <div className="waba-thread">
       {newMessage ? <NewLinkedReply scope={scope} dirty={replyDirty} onDirtyChange={onDirtyChange} onBack={() => setNewMessage(false)} onChanged={() => { void page(null, true); }} />
@@ -96,6 +124,9 @@ function NewLinkedReply({ scope, dirty, onDirtyChange, onBack, onChanged }: { sc
 function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient, onDirtyChange, onBack }: { scope: DisplayScope; id: string; canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; onRecipient: (r: Recipient) => void; onDirtyChange: (dirty: boolean) => void; onBack: () => void }) {
   const [conversation, setConversation] = useState<Load<Conversation>>({ state: "loading" });
   const [messages, setMessages] = useState<Load<{ rows: Message[]; cursor: string | null }>>({ state: "loading" });
+  const [indexing, setIndexing] = useState(false);
+  const messageRequest = useRef(0);
+  const foregroundMessages = useRef(false);
   // `quiet` is a host-push refresh: shown data stays on a failed read, and
   // messages already loaded stay (newer rows win by id).
   const show = useCallback(async (quiet = false) => {
@@ -103,12 +134,26 @@ function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient
     catch (e) { setConversation(c => quiet && c.state === "ok" ? c : { state: "failed", text: errorText(e, "The conversation could not be read.") }); }
   }, [scope, id]);
   const read = useCallback(async (after: string | null = null, quiet = false) => {
+    if (quiet && foregroundMessages.current) return;
+    const request = ++messageRequest.current;
+    if (!quiet) { foregroundMessages.current = true; setIndexing(false); }
     try {
-      const got = parseMessages(await serviceCall(scope, "whatsapp.messages", { conversation_id: id, limit: 50, ...(after ? { cursor: after } : {}) }));
+      const got = await readWhileIndexing(
+        async () => parseMessages(await serviceCall(scope, "whatsapp.messages", { conversation_id: id, limit: 50, ...(after ? { cursor: after } : {}) })),
+        () => request === messageRequest.current,
+        () => setIndexing(true),
+      );
+      if (!got) return;
+      setIndexing(false);
       setMessages(m => m.state === "ok" && (after || quiet)
         ? { state: "ok", value: { rows: after ? [...m.value.rows, ...got.rows.filter(n => !m.value.rows.some(o => o.id === n.id))] : [...got.rows, ...m.value.rows.filter(o => !got.rows.some(n => n.id === o.id))], cursor: quiet ? m.value.cursor : got.cursor } }
         : { state: "ok", value: { rows: got.rows, cursor: got.cursor } });
-    } catch (e) { setMessages(m => quiet && m.state === "ok" ? m : { state: "failed", text: errorText(e, "Messages could not be read.") }); }
+    } catch (e) {
+      if (request !== messageRequest.current) return;
+      setIndexing(false);
+      setMessages(m => quiet && m.state === "ok" ? m : { state: "failed", text: errorText(e, "Messages could not be read.") });
+    }
+    finally { if (!quiet && request === messageRequest.current) foregroundMessages.current = false; }
   }, [scope, id]);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [inserted, setInserted] = useState<{ text: string; n: number } | null>(null);
@@ -125,7 +170,7 @@ function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient
     return () => clearInterval(t);
   }, [readDraft, assist.show]);
   const reload = useCallback(() => { void show(); void read(); void readDraft(); }, [show, read, readDraft]);
-  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => { reload(); return () => { messageRequest.current++; foregroundMessages.current = false; }; }, [reload]);
   async function discard() {
     setAssistNote(null);
     try { await serviceCall(scope, "whatsapp.draft.discard", { conversation_id: id }); setDraft(null); }
@@ -148,9 +193,10 @@ function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient
     {conversation.state === "loading" ? <Loading>Reading the conversation…</Loading>
       : conversation.state === "failed" ? <ErrorNotice onRetry={() => { void show(); }}>{conversation.text}</ErrorNotice>
       : scope.provider !== "linked" && <p className="waba-muted">{c!.contact.phone ?? ""}{c!.status ? ` · ${c!.status}` : ""} · last inbound {when(c!.lastInboundAt)}</p>}
-    {messages.state === "loading" ? <Loading>Reading messages…</Loading>
+    {messages.state === "loading" ? <Loading>{indexing ? "Indexing older messages…" : "Reading messages…"}</Loading>
       : messages.state === "failed" ? <ErrorNotice onRetry={() => { void read(); }}>{messages.text}</ErrorNotice>
       : <>
+        {indexing && <p className="waba-muted" role="status">Indexing older messages…</p>}
         {messages.value.cursor && <Button size="sm" onClick={() => { void read(messages.value.cursor); }}>Load older messages</Button>}
         {!ordered.length ? <EmptyState title="No messages" name="messages" /> : <ol className="waba-messages" aria-label="Messages">{ordered.map(m =>
           <li key={m.id} className="waba-message" data-direction={m.direction === "outbound" ? "outbound" : "inbound"}>
