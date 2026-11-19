@@ -57,7 +57,7 @@ export default function Connection({ scope, canConnect }: { scope: DisplayScope;
   const status = read.state === "ok" ? read.status : null;
   return <section className="waba-page" aria-labelledby="waba-connection-title">
     <header className="waba-head">
-      <h1 id="waba-connection-title">Connection</h1>
+      <h1 id="waba-connection-title">Settings</h1>
       <Button size="sm" onClick={() => { void refresh(signup.phase === "open" || signup.phase === "manual" || signup.phase === "incomplete"); }} loading={read.state === "reading"}>Check status</Button>
     </header>
     {read.state === "unknown" || read.state === "reading" ? <Loading>{linked ? "Reading the linked-device connection…" : "Reading the WhatsApp connection from FavCRM…"}</Loading>

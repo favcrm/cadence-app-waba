@@ -1,7 +1,7 @@
 # Cadence app: WhatsApp Business (WABA)
 
-An installable Cadence app that ships its own screens. Step 1 (WABA-1) ships **Inbox** and
-**Connection**; step 2 (WABA-2) adds **Templates** and **Broadcasts**; the AI agent comes later.
+An installable Cadence app with **Inbox**, **Settings**, and official-provider
+**Templates**, **Broadcasts** and **AI agent** sections.
 It follows the same layout as `favcrm/cadence-app-crm`: an `app/` bundle with `screens/waba/`,
 built on the host's pinned screen-ui SDK.
 
@@ -11,6 +11,7 @@ built on the host's pinned screen-ui SDK.
 - **Approvals.** Every outbound reply is prepared by the host and sent only through the host-drawn approval card over that exact text.
 - **Members** get the reads only: the inbox shows without the composer or the connect action.
 - **Linked photo previews.** On a compatible hosted backend, the inbox displays bounded JPEG previews supplied with ordinary linked-device photos. It never fetches provider URLs or shows view-once photos. Older messages, documents, video and audio do not gain photo previews.
+- **Inbox layout.** `0.3.1` separates conversation and history scrolling, pins the approval composer, and adds a contact details panel with photo previews already loaded in that conversation. Choose the active provider under Settings. Provider choice belongs to the current app mount; it does not disconnect the other provider. Linked-device lifecycle actions still use the owner's account settings. Outbound media and shared contact notes/activity are not available in this build.
 
 Plan: cadence CAD-1465 (`cad1465-waba-plan-20261018.md`).
 
