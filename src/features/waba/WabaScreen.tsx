@@ -1,5 +1,6 @@
-import { ErrorNotice,Loading,Notice } from "@cadence/screen-ui";
-import { useEffect,useMemo,useState } from "react";
+import { Button,ErrorNotice,Loading,Notice } from "@cadence/screen-ui";
+import { useEffect,useLayoutEffect,useMemo,useRef,useState } from "react";
+import { patchRoute } from "../../bridge/route";
 import { markUnreachable,scopeError,useScope } from "../../bridge/scope";
 import Broadcasts from "./Broadcasts";
 import AiAgent from "./AiAgent";
@@ -23,8 +24,22 @@ export default function WabaScreen() {
   useEffect(() => { const t = setTimeout(markUnreachable, 15000); return () => clearTimeout(t); }, []);
   // Per-install copilot preference; kept in state so the section and the Inbox agree.
   const [prefs, setPrefs] = useState<Record<string, CopilotMode>>({});
+  const routeFocus = useRef<"inbox" | "connection" | null>(null);
+  const [returnError, setReturnError] = useState(false);
+  const section = snapshot?.route.section;
+  useLayoutEffect(() => {
+    if (routeFocus.current !== section) return;
+    routeFocus.current = null;
+    document.getElementById(section === "inbox" ? "waba-inbox-title" : "waba-provider-title")?.focus();
+  }, [section]);
   if (!snapshot || !scope) return scopeError() ? <ErrorNotice>{scopeError()}</ErrorNotice> : <Loading>Waiting for the verified WhatsApp mount…</Loading>;
   const { route, actions } = snapshot;
+  const zh = snapshot.presentationLocale === "zh-TW";
+  async function go(section: "inbox" | "connection") {
+    routeFocus.current = section;
+    try { await patchRoute({ section, view: "list", record_id: null }); }
+    catch (e) { routeFocus.current = null; throw e; }
+  }
   // Display affordances only, derived from the host-granted actions (members
   // get the reads); the host independently refuses every write it did not grant.
   const can = (...verbs: string[]) => verbs.every(v => actions.includes(v));
@@ -40,18 +55,24 @@ export default function WabaScreen() {
   const settings = route.section === "connection";
   return <main className="app-outlet waba" key={`${scope.installId}:${snapshot.digest}`}>
     {settings ? <>
-      <fieldset className="waba-provider" aria-describedby={replyDirty ? "waba-provider-draft" : undefined}>
-        <legend>Inbox provider</legend>
-        <label><input type="radio" name="waba-provider" value="official" checked={!linked} disabled={replyDirty} onChange={() => setProvider("official")} /> Official API (FavCRM)</label>
-        <label><input type="radio" name="waba-provider" value="linked" checked={linked} disabled={replyDirty} onChange={() => setProvider("linked")} /> Linked device</label>
-      </fieldset>
-      {replyDirty && <p id="waba-provider-draft" className="waba-muted">Finish the reply or check and dismiss its status before switching connections.</p>}
+      <div className="waba-connection-picker">
+        <fieldset className="waba-provider" aria-describedby="waba-provider-hint">
+          <legend id="waba-provider-title" tabIndex={-1}>{zh ? "收件匣連線" : "Inbox connection"}</legend>
+          <label><input type="radio" name="waba-provider" value="official" checked={!linked} disabled={replyDirty} onChange={() => setProvider("official")} /> {zh ? "官方 API (FavCRM)" : "Official API (FavCRM)"}</label>
+          <label><input type="radio" name="waba-provider" value="linked" checked={linked} disabled={replyDirty} onChange={() => setProvider("linked")} /> {zh ? "已連結裝置" : "Linked device"}</label>
+        </fieldset>
+        <p id="waba-provider-hint" className="waba-muted">{replyDirty
+          ? (zh ? "請先完成回覆或關閉傳送結果，再切換連線。" : "Finish the reply or dismiss its result before switching connections.")
+          : (zh ? "此選擇只適用於目前分頁，不會中斷任何連線。" : "This choice applies to the current tab. Switching doesn’t disconnect either connection.")}</p>
+        <Button size="sm" onClick={() => { setReturnError(false); void go("inbox").catch(() => setReturnError(true)); }}>{zh ? "開啟收件匣" : "Open Inbox"}</Button>
+        {returnError && <ErrorNotice bare>{zh ? "無法開啟收件匣，請從側欄選取收件匣。" : "Couldn’t open the Inbox. Choose Inbox in the sidebar."}</ErrorNotice>}
+      </div>
       {linked && <Notice>Test accounts only: a crash can currently lose incoming test messages. Do not use this connection for production traffic.</Notice>}
       <Connection key={provider} scope={scope} canConnect={viewer.canConnect} />
     </> : linked && route.section !== "inbox" ? <Notice state="read-only">This section requires the official API. Choose your Inbox provider in Settings.</Notice>
       : route.section === "templates" ? <Templates scope={scope} canSend={viewer.canTemplate} routeId={route.record_id} recipient={recipient} onRecipient={setRecipient} />
       : route.section === "ai" ? <AiAgent installId={scope.installId} mode={mode} persisted={stored.persisted} onMode={m => setPrefs(p => ({ ...p, [scope.installId]: m }))} />
       : route.section === "broadcasts" ? <Broadcasts scope={scope} rights={rights} routeId={route.record_id} creating={route.view === "new"} />
-      : <Inbox key={provider} scope={scope} canReply={viewer.canReply} canTemplate={viewer.canTemplate} assist={assist} handoff={handoff} routeId={linked ? null : route.record_id} onRecipient={setRecipient} replyDirty={replyDirty} onDirtyChange={setReplyDirty} />}
+      : <Inbox key={provider} scope={scope} canReply={viewer.canReply} canTemplate={viewer.canTemplate} assist={assist} handoff={handoff} routeId={linked ? null : route.record_id} onRecipient={setRecipient} replyDirty={replyDirty} onDirtyChange={setReplyDirty} openSettings={() => go("connection")} />}
   </main>;
 }
