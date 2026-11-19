@@ -1,7 +1,7 @@
 import { ApiError,Button,EmptyState,ErrorNotice,Field,Loading,Notice } from "@cadence/screen-ui";
 import { useCallback,useEffect,useRef,useState } from "react";
 import { patchRoute } from "../../bridge/route";
-import { routable,useOnPush,type DisplayScope } from "../../bridge/scope";
+import { routable,useOnPush,useScope,type DisplayScope } from "../../bridge/scope";
 import { serviceCall,serviceSlot } from "../../bridge/services";
 import type { Recipient } from "./Templates";
 import { declinedReason,errorText,parseConversation,parseConversations,parseDraft,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Draft,type Message,type ReplyState,type ReplyStatus } from "./door";
@@ -122,6 +122,8 @@ function NewLinkedReply({ scope, dirty, onDirtyChange, onBack, onChanged }: { sc
 }
 
 function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient, onDirtyChange, onBack }: { scope: DisplayScope; id: string; canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; onRecipient: (r: Recipient) => void; onDirtyChange: (dirty: boolean) => void; onBack: () => void }) {
+  const zh = useScope()?.presentationLocale === "zh-TW";
+  const unavailablePreview = zh ? "無法顯示預覽" : "Preview unavailable";
   const [conversation, setConversation] = useState<Load<Conversation>>({ state: "loading" });
   const [messages, setMessages] = useState<Load<{ rows: Message[]; cursor: string | null }>>({ state: "loading" });
   const [indexing, setIndexing] = useState(false);
@@ -200,7 +202,11 @@ function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient
         {messages.value.cursor && <Button size="sm" onClick={() => { void read(messages.value.cursor); }}>Load older messages</Button>}
         {!ordered.length ? <EmptyState title="No messages" name="messages" /> : <ol className="waba-messages" aria-label="Messages">{ordered.map(m =>
           <li key={m.id} className="waba-message" data-direction={m.direction === "outbound" ? "outbound" : "inbound"}>
-            <p>{m.body ?? (m.type ? `[${m.type}]` : "")}</p>
+            {scope.provider === "linked" && m.type === "unsupported"
+              ? m.previewJpeg
+                ? <PhotoPreview key={m.previewJpeg} jpeg={m.previewJpeg} label={zh ? "相片預覽" : "Photo preview"} unavailable={unavailablePreview} />
+                : <p className="waba-muted">{unavailablePreview}</p>
+              : <p>{m.body ?? (m.type ? `[${m.type}]` : "")}</p>}
             <span className="waba-muted">{when(m.createdAt)}{m.status ? ` · ${m.status}` : ""}</span>
           </li>)}</ol>}
       </>}
@@ -208,6 +214,12 @@ function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient
       : <Notice state="read-only">You can read this inbox. Only the workspace operator can reply.</Notice>)}
     {c && canTemplate && <Button size="sm" onClick={() => { onRecipient(c); void patchRoute({ section: "templates", view: "list", record_id: null }).catch(() => undefined); }}>Send an approved template…</Button>}
   </article>;
+}
+
+function PhotoPreview({ jpeg, label, unavailable }: { jpeg: string; label: string; unavailable: string }) {
+  const [failed, setFailed] = useState(false);
+  return failed ? <p className="waba-muted">{unavailable}</p>
+    : <img className="waba-photo-preview" src={`data:image/jpeg;base64,${jpeg}`} alt={label} loading="lazy" decoding="async" onError={() => setFailed(true)} />;
 }
 
 function Brief({ scope, id, canOpen }: { scope: DisplayScope; id: string; canOpen: boolean }) {

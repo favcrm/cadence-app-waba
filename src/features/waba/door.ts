@@ -12,7 +12,7 @@ export interface ConversationRow {
   unreadCount: number | null; replyMode: string | null; freeformUntil: string | null;
 }
 export interface Conversation extends ConversationRow { status: string | null; lastInboundAt: string | null; handoffAt: string | null }
-export interface Message { id: string; direction: string | null; body: string | null; status: string | null; senderType: string | null; createdAt: string | null; type: string | null }
+export interface Message { id: string; direction: string | null; body: string | null; status: string | null; senderType: string | null; createdAt: string | null; type: string | null; previewJpeg: string | null }
 export interface Page<T> { rows: T[]; cursor: string | null }
 /** The host's reply states; anything else reads as uncertain. */
 export type ReplyState = "sent" | "accepted" | "pending" | "failed" | "refused" | "uncertain";
@@ -62,12 +62,17 @@ export function parseConversation(v: unknown): Conversation {
   const d = door(v);
   return { ...row({ ...d, lastMessage: null }), status: str(d.status), lastInboundAt: str(d.lastInboundAt), handoffAt: str(d.handoffAt) };
 }
+function previewJpeg(value: unknown): string | null {
+  // Do not accept a provider URL or a MIME type from a message payload.
+  return typeof value === "string" && value.length <= 21_848 && value.length % 4 === 0 &&
+    value.startsWith("/9j/") && /^[A-Za-z0-9+/]+={0,2}$/.test(value) ? value : null;
+}
 export function parseMessages(v: unknown): Page<Message> {
   const d = door(v);
   if (!Array.isArray(d.messages)) bad();
   return { rows: d.messages.map(m => {
     if (!obj(m) || !str(m.id)) bad();
-    return { id: m.id as string, direction: str(m.direction), body: str(m.body), status: str(m.status), senderType: str(m.senderType), createdAt: str(m.createdAt), type: str(m.type) };
+    return { id: m.id as string, direction: str(m.direction), body: str(m.body), status: str(m.status), senderType: str(m.senderType), createdAt: str(m.createdAt), type: str(m.type), previewJpeg: previewJpeg(m.previewJpeg) };
   }), cursor: str(d.cursor) };
 }
 export function parsePrepared(v: unknown): Prepared {

@@ -10,6 +10,7 @@ built on the host's pinned screen-ui SDK.
   The screen declares the `whatsapp.*` operations; neither the app nor the browser ever holds a credential or a company id.
 - **Approvals.** Every outbound reply is prepared by the host and sent only through the host-drawn approval card over that exact text.
 - **Members** get the reads only: the inbox shows without the composer or the connect action.
+- **Linked photo previews.** On a compatible hosted backend, the inbox displays bounded JPEG previews supplied with ordinary linked-device photos. It never fetches provider URLs or shows view-once photos. Older messages, documents, video and audio do not gain photo previews.
 
 Plan: cadence CAD-1465 (`cad1465-waba-plan-20261018.md`).
 

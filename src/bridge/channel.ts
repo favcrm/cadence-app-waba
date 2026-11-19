@@ -35,7 +35,7 @@ class Channel {
     pair.port1.onmessageerror = () => this.retire(invalid());
     pair.port1.start();
     window.parent.postMessage({ v: 1, op: "init", tag: boot.tag, bridge_nonce: boot.bridge_nonce, generation: boot.generation }, boot.parent_origin, [pair.port2]);
-    pair.port1.postMessage({ v: 1, op: "ready", accepts: ["screen.v2", "screen-records.v1"] });
+    pair.port1.postMessage({ v: 1, op: "ready", accepts: ["screen.v2", "screen-records.v1", "screen-locale.v1"] });
     window.addEventListener("pagehide", () => this.retire(new ApiError("WhatsApp mount retired", 403)), { once: true });
   }
   request(kind: "call" | "slot", verb: string, args: Record<string, unknown>): Promise<unknown> {

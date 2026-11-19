@@ -4,7 +4,7 @@ import { exact } from "./channel";
 import { OPERATIONS,type Section } from "./services";
 export interface DisplayScope { installId: string; digest: string; provider?: "linked" }
 export interface Route { section: Section; view: "list" | "new"; record_id: string | null; segment_id: string | null }
-export interface ScopeSnapshot { scope: DisplayScope; digest: string; actions: string[]; route: Route }
+export interface ScopeSnapshot { scope: DisplayScope; digest: string; actions: string[]; route: Route; presentationLocale: "en" | "zh-TW" }
 let snapshot: ScopeSnapshot | null = null;
 let error: string | null = null;
 const listeners = new Set<() => void>();
@@ -48,7 +48,7 @@ export function acceptPush(p: Record<string, unknown>): void {
   if (!obj(p.installation) || !exact(p.installation, ["install_id", "name", "title", "version", "digest", "summary"]) || p.installation.install_id !== p.install_id || p.installation.digest !== p.digest || p.installation.name !== "waba" || !["title", "version", "summary"].every(k => typeof (p.installation as Record<string, unknown>)[k] === "string") || (p.contexts !== undefined && (!Array.isArray(p.contexts) || !p.contexts.every(c => obj(c) && exact(c, ["id", "label"]) && routeId(c.id) && typeof c.label === "string")))) invalid();
   if (p.read_observations !== undefined && (!Array.isArray(p.read_observations) || p.read_observations.length > 16)) invalid();
   if (snapshot && (snapshot.scope.installId !== p.install_id || snapshot.digest !== p.digest)) invalid();
-  snapshot = { scope: { installId: p.install_id as string, digest: p.digest as string }, digest: p.digest as string, actions: p.actions as string[], route: parseRoute(p.route) };
+  snapshot = { scope: { installId: p.install_id as string, digest: p.digest as string }, digest: p.digest as string, actions: p.actions as string[], route: parseRoute(p.route), presentationLocale: p.presentation_locale === "zh-TW" ? "zh-TW" : "en" };
   pushes++; error = null; notify();
 }
 export function assertCurrentScope(scope: DisplayScope): void {
