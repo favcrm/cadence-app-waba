@@ -19,6 +19,7 @@ built on the host's pinned screen-ui SDK.
 - **Existing linked replies (`0.3.7`).** On a compatible board, an owner replies in an existing linked-device thread using the board composer: Send or Enter once sends, and Shift+Enter adds a line. The board confirms the exact recipient and edited text. Older hosts, Official API and new-number messages retain their existing approval flow.
 - **Reply availability (`0.3.8`).** A compatible board keeps the linked reply dock read-only while it verifies the chat. A single status below the conversation header explains a block without hiding history. The app displays host status only; it cannot authorize or send a reply.
 - **Inbox layout (`0.3.9`).** The conversation list sits in its own scrollable panel. All and Unread filter loaded chats; keep loading older conversations to extend either view. Follow-up filters remain separate from unread status. A compatible board aligns the text reply dock to the right-hand conversation, or to the full conversation on narrow screens.
+- **Inbox layout and unread (`0.3.10`).** On compatible boards the reply dock follows the measured message pane, including when Contact details narrows it, and hides while narrow Contact details replaces the pane. Older boards retain their existing layout. Unread appears only when loaded conversations provide unread counts; if those counts become unavailable, the inbox returns to All.
 
 Plan: cadence CAD-1465 (`cad1465-waba-plan-20261018.md`).
 

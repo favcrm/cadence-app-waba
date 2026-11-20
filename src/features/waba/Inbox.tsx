@@ -202,7 +202,10 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
   const needle = filter.trim().toLocaleLowerCase();
   const browse = useWorkBrowse(scope, inboxScope, queue === "due" ? "due" : queue === "all" && needle ? "names" : null, queue === "due" ? dueDay : needle);
   const recordFor = (row: ConversationRow) => row.work && inboxScope && validWorkRef(row.work.ref, inboxScope) ? work.records.get(row.work.ref) : undefined;
-  const canFilterUnread = linked || rows.some(row => row.unreadCount !== null);
+  const canFilterUnread = rows.some(row => row.unreadCount !== null);
+  useLayoutEffect(() => {
+    if (!canFilterUnread && queue === "unread") setQueue("all");
+  }, [canFilterUnread, queue]);
   const unreadCount = rows.filter(row => (row.unreadCount ?? 0) > 0).length;
   const shown = queue === "due" ? [] : rows.filter(r => {
     const record = recordFor(r);
@@ -341,6 +344,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const messageRequest = useRef(0);
   const foregroundMessages = useRef(false);
   const timeline = useRef<HTMLDivElement>(null);
+  const messagePane = useRef<HTMLDivElement>(null);
   const keepBottom = useRef(true);
   const prependHeight = useRef<number | null>(null);
   const [showLatest, setShowLatest] = useState(false);
@@ -455,11 +459,41 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const composeId = scope.provider === "linked" && canReply && channel.hostCompose
     && /^[A-Za-z0-9._:-]{1,128}@(s\.whatsapp\.net|lid|g\.us)$/.test(id) ? id : null;
   const replyAvailability = useSyncExternalStore(channel.subscribeReplyAvailability, () => channel.availabilityFor(composeId));
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (composeId === null) return;
     channel.nominateConversation(composeId);
     return () => channel.nominateConversation(null);
   }, [composeId]);
+  useLayoutEffect(() => {
+    const pane = messagePane.current;
+    if (composeId === null || !channel.hostReplyLayout || !pane) return;
+    const measure = () => {
+      if (!channel.hostReplyLayout) return;
+      if (getComputedStyle(pane).visibility === "hidden") {
+        channel.publishReplyLayout(null);
+        return;
+      }
+      const width = document.documentElement.clientWidth;
+      if (!width) return;
+      const rect = pane.getBoundingClientRect();
+      const left = Math.max(0, Math.min(10000, Math.round(rect.left / width * 10000)));
+      const right = Math.max(0, Math.min(10000, Math.round(rect.right / width * 10000)));
+      if (left < right) channel.publishReplyLayout([left, right]);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(pane);
+    observer.observe(document.documentElement);
+    window.addEventListener("resize", measure);
+    const unsubscribe = channel.subscribeReplyAvailability(() => {
+      if (!channel.hostReplyLayout) observer.disconnect();
+    });
+    return () => {
+      unsubscribe();
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [composeId, details]);
   const linked = scope.provider === "linked";
   const phone = c ? contactPhone(c, linked) : null;
   const workLink = inboxScope && c?.work && validWorkRef(c.work.ref, inboxScope) ? c.work : null;
@@ -492,7 +526,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
       {workLink && work.checked.has(workLink.ref) && <span className="waba-work-state">{threadStateLabel(effectiveThreadState(record, workLink.inboundVersion), zh)}</span>}
     </header>
     <div className="waba-conversation-body">
-      <div className="waba-thread-main">
+      <div className="waba-thread-main" ref={messagePane}>
         {replyAvailability && <div className="waba-reply-availability" role="status">
           {replyAvailability !== "verified" && <Notice state={replyAvailability}>
             {replyAvailability === "checking" ? (zh ? "正在核對收件人…" : "Verifying recipient…")

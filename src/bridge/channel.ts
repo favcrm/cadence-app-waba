@@ -21,6 +21,8 @@ class Channel {
   private serial = 0;
   private composeSupported = false;
   private replyAvailabilitySupported = false;
+  private replyLayoutSupported = false;
+  private lastLayout: string | null = null;
   private nomination = 0;
   private conversationId: string | null = null;
   private replyAvailability: ReplyAvailability = "checking";
@@ -37,10 +39,19 @@ class Channel {
     this.replyListeners.forEach(listener => listener());
   }
   get hostCompose(): boolean { return this.composeSupported; }
+  get hostReplyLayout(): boolean { return this.replyLayoutSupported && !this.retired; }
+  publishReplyLayout(bounds: [number, number] | null): void {
+    if (!this.hostReplyLayout || !this.port || this.conversationId === null) return;
+    const key = bounds === null ? "hidden" : `${bounds[0]}:${bounds[1]}`;
+    if (key === this.lastLayout) return;
+    this.lastLayout = key;
+    this.port.postMessage({ v: 2, op: "whatsapp-reply-layout", nomination: this.nomination, bounds });
+  }
   nominateConversation(conversationId: string | null): void {
     if (!this.composeSupported || !this.port || this.retired || this.conversationId === conversationId) return;
     this.conversationId = conversationId;
     this.nomination++;
+    this.lastLayout = null;
     this.replyAvailability = "checking";
     this.port.postMessage({ v: 2, op: "whatsapp-compose", conversation_id: conversationId });
     this.announceReplyAvailability();
@@ -64,9 +75,11 @@ class Channel {
     window.parent.postMessage({ v: 1, op: "init", tag: boot.tag, bridge_nonce: boot.bridge_nonce, generation: boot.generation }, boot.parent_origin, [pair.port2]);
     this.composeSupported = window.location.hash === "#cadence-whatsapp-compose-v1";
     this.replyAvailabilitySupported = this.composeSupported && new URLSearchParams(window.location.search).get("wa_compose_availability") === "1";
+    this.replyLayoutSupported = this.replyAvailabilitySupported && new URLSearchParams(window.location.search).get("wa_compose_layout") === "1";
     pair.port1.postMessage({ v: 1, op: "ready", accepts: ["screen.v2", "screen-records.v1", "screen-locale.v1",
       ...(this.composeSupported ? ["screen-whatsapp-compose.v1"] : []),
-      ...(this.replyAvailabilitySupported ? ["screen-whatsapp-reply-availability.v1"] : [])] });
+      ...(this.replyAvailabilitySupported ? ["screen-whatsapp-reply-availability.v1"] : []),
+      ...(this.replyLayoutSupported ? ["screen-whatsapp-reply-layout.v1"] : [])] });
     window.addEventListener("pagehide", () => this.retire(new ApiError("WhatsApp mount retired", 403)), { once: true });
   }
   request(kind: "call" | "slot", verb: string, args: Record<string, unknown>): Promise<unknown> {
