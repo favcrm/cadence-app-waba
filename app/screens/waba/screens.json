@@ -16,8 +16,8 @@
     {
       "name": "client.js",
       "media_type": "text/javascript",
-      "size": 129113,
-      "sha256": "sha256:858de9d2597d50ac65ac1be026c70a795ed467627ae0cf9a4d840105d323b350"
+      "size": 129055,
+      "sha256": "sha256:3d795b11999bbf0ad8aec4a1a2c133b7b03f6cd1bbc7663acd3578d569596fad"
     },
     {
       "name": "waba.css",
@@ -27,7 +27,7 @@
     }
   ],
   "provenance": {
-    "source_digest": "sha256:fb80ce98cb5ae5d5a1290f3b4860fcea06850d2ce68915a41d68390bd28ec988",
+    "source_digest": "sha256:d3ebb3dda18f013ef4d8bf4af5010857c78ac9ea9abd6a56d2c7d933aa469575",
     "sdk_digest": "sha256:fd65c974511e63b3996e9fa7e438fb4e39df5f508d11636116ef150fcc123e35",
     "toolchain_digest": "sha256:e21cfc8222db408abe6ba5a482520639d9cf4b96481c19aff4b4246af8a65e42"
   },

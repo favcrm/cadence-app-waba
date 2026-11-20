@@ -442,9 +442,8 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const ordered = useMemo(() => messages.state === "ok"
     ? [...messages.value.rows].sort((a, b) => (stamp(a.createdAt) ?? 0) - (stamp(b.createdAt) ?? 0))
     : [], [messages]);
-  const composeId = scope.provider === "linked" && canReply && channel.hostCompose && conversation.state === "ok"
-    && /^[A-Za-z0-9._:-]{1,128}@(s\.whatsapp\.net|lid|g\.us)$/.test(conversation.value.conversationId)
-    ? conversation.value.conversationId : null;
+  const composeId = scope.provider === "linked" && canReply && channel.hostCompose
+    && /^[A-Za-z0-9._:-]{1,128}@(s\.whatsapp\.net|lid|g\.us)$/.test(id) ? id : null;
   const replyAvailability = useSyncExternalStore(channel.subscribeReplyAvailability, () => channel.availabilityFor(composeId));
   useEffect(() => {
     if (composeId === null) return;
