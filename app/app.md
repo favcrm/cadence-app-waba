@@ -1,7 +1,7 @@
 ---
 app: waba
 title: WhatsApp Business
-version: '0.3.4'
+version: '0.3.5'
 summary: Use the official WhatsApp Business connection or a test-only linked device for the inbox and owner-approved replies. The app holds no credentials.
 needs:
   connections: []
@@ -24,6 +24,7 @@ listing:
     stores:
       - Assistant reply drafts, the selected inbox provider and the AI reply mode
       - Official data stays in FavCRM; linked-device message contents and identifiers are encrypted
+      - Linked-inbox names, statuses, follow-up dates and internal notes are visible only to workspace owners
       - Linked-device activity timestamps are indexed locally in plaintext
     personal: true
 ---
@@ -74,6 +75,15 @@ Those tools are not shown for linked devices. Old tool URLs open the Inbox.
   WhatsApp server ACK is recorded; acceptance does not confirm delivery.
   Never retry an uncertain send automatically.
   Replies are text only; inbound photo previews do not support uploads.
+- **Contact details (linked device on supported hosts).** Click the chat
+  header to see the full phone number when WhatsApp provides it. Owners
+  can save a shared name, add a private note, choose Needs reply, Waiting
+  or Done, and set a follow-up date. Use Search to find saved names and
+  **Follow-ups due** to find reminders, including older conversations.
+  New inbound messages reopen a waiting or done conversation when the
+  inbox reads them. Follow-ups do not send messages. No CRM is required.
+  Work is scoped to the current linked account; resetting the account
+  hides the previous account's names, notes and follow-ups from the inbox.
 - **Templates.** The templates FavCRM holds, with status, revision and
   variables. "Use in conversation" picks a conversation (kept while you
   move between pages) and sends an approved template through the

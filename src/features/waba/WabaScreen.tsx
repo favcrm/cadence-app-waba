@@ -164,7 +164,7 @@ export default function WabaScreen() {
         </fieldset>
         <p id="waba-provider-hint" className="waba-muted">{!canEdit
           ? (zh ? "只有工作區擁有人可設定連線。" : "Only a workspace owner can set the connection.")
-          : replyDirty ? (zh ? "請先完成目前的回覆。" : "Finish the current reply before changing the connection.")
+          : replyDirty ? (zh ? "請先儲存或取消目前的修改。" : "Save or cancel your changes before changing the connection.")
           : (zh ? "此安裝每次只使用一個連線。儲存不會中斷任何連線。" : "This installation uses one connection at a time. Saving doesn’t disconnect either provider.")}</p>
         <div className="waba-head">
           {canEdit && <Button size="sm" variant="primary" loading={saving} disabled={!chosen || chosen === provider || replyDirty || !!saveError}

@@ -3,6 +3,9 @@ import { Fragment,useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState,
 import { patchRoute } from "../../bridge/route";
 import { routable,useOnPush,useScope,type DisplayScope } from "../../bridge/scope";
 import { serviceCall,serviceSlot } from "../../bridge/services";
+import ContactWork,{ threadStateLabel } from "./ContactWork";
+import { effectiveThreadState,listThreadWork,validWorkRef,type ThreadState,type ThreadWork } from "./inboxWork";
+import { useWorkBrowse } from "./useWorkBrowse";
 import type { Recipient } from "./Templates";
 import { declinedReason,errorText,parseConversation,parseConversations,parseDraft,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Draft,type Message,type ReplyState,type ReplyStatus } from "./door";
 
@@ -22,8 +25,9 @@ function contactPhone(row: ConversationRow, linked: boolean) {
   return address ? `+${address[1]}` : null;
 }
 
-function contactName(row: ConversationRow, phone: string | null, linked: boolean, zh: boolean) {
-  if (row.contact.name) return row.contact.name;
+function contactName(row: ConversationRow, phone: string | null, linked: boolean, zh: boolean, name?: string | null) {
+  const display = name || row.contact.name;
+  if (display) return display;
   if (linked && row.conversationId.endsWith("@g.us")) return zh ? "WhatsApp 群組" : "WhatsApp group";
   return phone ?? (linked ? (zh ? "WhatsApp 聯絡人" : "WhatsApp contact") : (zh ? "未知聯絡人" : "Unknown contact"));
 }
@@ -61,6 +65,17 @@ async function readWhileIndexing<T>(
   return undefined;
 }
 
+type Queue = "all" | ThreadState | "due";
+const queues = ["all", "needs_reply", "waiting", "done", "due"] as const;
+type WorkIndex = { records: Map<string, ThreadWork>; checked: Set<string> };
+const emptyWorkIndex = (): WorkIndex => ({ records: new Map(), checked: new Set() });
+function calendarDay(now: Date) {
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+function dueLabel(date: string, today: string, zh: boolean) {
+  return date === today ? (zh ? "今日跟進" : "Due today") : date < today ? (zh ? "跟進逾期" : "Overdue") : `${zh ? "跟進" : "Follow up"} ${date}`;
+}
+
 export default function Inbox({ scope, canReply, canTemplate, assist, handoff, routeId: routed, initialId, onRecipient, replyDirty, onDirtyChange, openSettings, tools }: { scope: DisplayScope; canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; routeId: string | null; initialId: string | null; onRecipient: (r: Recipient) => void; replyDirty: boolean; onDirtyChange: (dirty: boolean) => void; openSettings: () => Promise<unknown>; tools: ReactNode }) {
   const zh = useScope()?.presentationLocale === "zh-TW", locale = zh ? "zh" : "en";
   const linked = scope.provider === "linked";
@@ -71,8 +86,24 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
   const listRequest = useRef(0);
   const foregroundList = useRef(false);
   const [filter, setFilter] = useState("");
+  const [queue, setQueue] = useState<Queue>("all");
+  const [inboxScope, setInboxScope] = useState<string | null>(null);
+  const liveInbox = useRef<string | null>(null);
+  const [work, setWork] = useState(emptyWorkIndex);
+  const [workError, setWorkError] = useState(false);
+  const remember = useCallback((record: ThreadWork) => {
+    if (!liveInbox.current || !validWorkRef(record.ref, liveInbox.current)) return;
+    setWork(previous => {
+      if ((previous.records.get(record.ref)?.revision ?? 0) >= record.revision) return previous;
+      return { records: new Map(previous.records).set(record.ref, record), checked: new Set(previous.checked).add(record.ref) };
+    });
+  }, []);
   // Ids outside the host route grammar stay a local selection.
   const [local, setLocal] = useState(initialId);
+  const [resolved, setResolved] = useState<Conversation | null>(null);
+  const [opening, setOpening] = useState(false);
+  const [openError, setOpenError] = useState(false);
+  const openingRequest = useRef(0);
   const [newMessage, setNewMessage] = useState(false);
   const selected = routed ?? local;
   const openRow = useRef<HTMLElement | null>(null);
@@ -97,36 +128,105 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
         () => { if (!quiet) setList("indexing"); },
       );
       if (!got) return;
-      setRows(r => after ? [...r, ...got.rows.filter(n => !r.some(o => o.conversationId === n.conversationId))]
+      const nextInbox = linked ? got.inboxScope : null;
+      const changed = nextInbox !== liveInbox.current;
+      if (changed) {
+        if (liveInbox.current !== null) {
+          openingRequest.current++;
+          setOpening(false); setLocal(null); setResolved(null); setNewMessage(false); setQueue("all");
+        }
+        liveInbox.current = nextInbox;
+        setInboxScope(nextInbox); setWork(emptyWorkIndex()); setWorkError(false);
+      }
+      setRows(r => changed ? got.rows : after ? [...r, ...got.rows.filter(n => !r.some(o => o.conversationId === n.conversationId))]
         : quiet ? [...got.rows, ...r.filter(o => !got.rows.some(n => n.conversationId === o.conversationId))] : got.rows);
-      setCursor(c => quiet && c ? c : got.cursor); setList("ok");
-    } catch { if (request === listRequest.current && !quiet) setList("failed"); }
+      setCursor(c => quiet && c && !changed ? c : got.cursor); setList("ok");
+      if (nextInbox && got.rows.length) {
+        const refs = got.rows.flatMap(r => r.work ? [r.work.ref] : []);
+        try {
+          const records = await listThreadWork(scope, nextInbox, refs);
+          if (request !== listRequest.current) return;
+          setWork(previous => {
+            const next = { records: new Map(previous.records), checked: new Set(previous.checked) };
+            for (const ref of refs) next.checked.add(ref);
+            for (const record of records) if ((next.records.get(record.ref)?.revision ?? 0) < record.revision) next.records.set(record.ref, record);
+            return next;
+          });
+          setWorkError(false);
+        } catch { if (request === listRequest.current) setWorkError(true); }
+      }
+    } catch (error) {
+      if (request !== listRequest.current) return;
+      if (linked && error instanceof ApiError && error.code === "not_granted") {
+        openingRequest.current++;
+        liveInbox.current = null;
+        setInboxScope(null); setLocal(null); setResolved(null); setNewMessage(false);
+        setOpening(false); setOpenError(false); setQueue("all"); setRows([]); setCursor(null);
+        setWork(emptyWorkIndex()); setWorkError(false); setList("failed");
+      } else if (!quiet) setList("failed");
+    }
     finally { if (!quiet && request === listRequest.current) foregroundList.current = false; }
-  }, [scope]);
+  }, [scope, linked]);
   useEffect(() => { void page(null); return () => { listRequest.current++; foregroundList.current = false; }; }, [page]);
   useOnPush(() => page(null, true));
-  function select(id: string | null) {
+  function select(id: string | null, observed: Conversation | null = null) {
+    openingRequest.current++;
+    setOpening(false); setOpenError(false); setResolved(observed);
     setNewMessage(false);
     focusThread.current = true;
     if (scope.provider === "linked") { setLocal(id); return; }
     if (id === null || routable(id)) { setLocal(null); void patchRoute({ section: "inbox", view: "list", record_id: id }).catch(() => undefined); }
     else { setLocal(id); void patchRoute({ section: "inbox", view: "list", record_id: null }).catch(() => undefined); }
   }
-  const needle = filter.trim().toLowerCase();
-  const shown = needle ? rows.filter(r => [r.contact.name, r.contact.phone, r.lastMessage?.body, ...(scope.provider === "linked" ? [r.conversationId] : [])].some(v => v?.toLowerCase().includes(needle))) : rows;
+  async function openWork(ref: string, source: HTMLElement) {
+    if (!inboxScope || !validWorkRef(ref, inboxScope) || opening || replyDirty) return;
+    const account = inboxScope, request = ++openingRequest.current;
+    setOpening(true); setOpenError(false);
+    try {
+      const found = parseConversation(await serviceCall(scope, "whatsapp.conversations.show", { conversation_id: ref }));
+      if (request !== openingRequest.current || liveInbox.current !== account) return;
+      if (found.work?.ref !== ref || found.conversationId === ref) throw new ApiError("Conversation reference did not resolve", 502);
+      openRow.current = source;
+      select(found.conversationId, found);
+    } catch { if (request === openingRequest.current) setOpenError(true); }
+    finally { if (request === openingRequest.current) setOpening(false); }
+  }
+  const now = new Date(), today = dayFormat[locale].format(now), dueDay = calendarDay(now);
+  const needle = filter.trim().toLocaleLowerCase();
+  const browse = useWorkBrowse(scope, inboxScope, queue === "due" ? "due" : queue === "all" && needle ? "names" : null, queue === "due" ? dueDay : needle);
+  const recordFor = (row: ConversationRow) => row.work && inboxScope && validWorkRef(row.work.ref, inboxScope) ? work.records.get(row.work.ref) : undefined;
+  const shown = queue === "due" ? [] : rows.filter(r => {
+    const record = recordFor(r);
+    if (queue !== "all" && (!r.work || !work.checked.has(r.work.ref) || effectiveThreadState(record, r.work.inboundVersion) !== queue)) return false;
+    return !needle || [record?.name, r.contact.name, contactPhone(r, linked), r.lastMessage?.body].some(v => v?.toLocaleLowerCase().includes(needle));
+  });
+  const pageByRef = useMemo(() => new Map(rows.flatMap(r => r.work ? [[r.work.ref, r] as const] : [])), [rows]);
+  const extras = browse.page?.rows.map(row => work.records.get(row.ref) ?? row).filter(r => {
+    if (queue === "due") return !!r.due && r.due <= dueDay && (!needle || (r.name ?? pageByRef.get(r.ref)?.contact.name)?.toLocaleLowerCase().includes(needle));
+    return !pageByRef.has(r.ref) && !!r.name?.toLocaleLowerCase().includes(needle);
+  }) ?? [];
   const failed = list === "failed";
-  const today = dayFormat[locale].format(Date.now());
+  const browseLabel = queue === "due" ? (zh ? "查找跟進事項…" : "Finding follow-ups…") : (zh ? "搜尋已儲存名稱…" : "Searching saved names…");
   return <section className="waba-page waba-inbox" data-selected={newMessage || selected ? "yes" : "no"} aria-label={zh ? "收件匣" : "Inbox"}>
     <div className="waba-list" aria-labelledby="waba-inbox-title">
       <header className="waba-list-head">
         <div className="waba-head">
           <h1 id="waba-inbox-title" tabIndex={-1}>{zh ? "收件匣" : "Inbox"}</h1>
-          {linked && canReply && <Button size="sm" variant="primary" disabled={replyDirty} onClick={e => { openRow.current = e.currentTarget; focusThread.current = true; setLocal(null); setNewMessage(true); }}>{zh ? "新增訊息" : "New message"}</Button>}
+          {linked && canReply && <Button size="sm" variant="primary" disabled={replyDirty || opening} onClick={e => { openRow.current = e.currentTarget; focusThread.current = true; setLocal(null); setResolved(null); setNewMessage(true); }}>{zh ? "新增訊息" : "New message"}</Button>}
           {tools}
         </div>
-        <input className="field waba-search" type="search" aria-label={zh ? "搜尋已載入對話" : "Search loaded conversations"} placeholder={zh ? "搜尋對話…" : "Search conversations…"} value={filter} onChange={e => setFilter(e.target.value)} />
+        <input className="field waba-search" type="search" aria-label={zh ? "搜尋對話" : "Search conversations"} placeholder={zh ? "搜尋對話…" : "Search conversations…"} value={filter} onChange={e => setFilter(e.target.value)} />
+        {inboxScope && <select className="field waba-queue" aria-label={zh ? "篩選對話" : "Conversation filter"} value={queue} onChange={e => {
+          const next = queues.find(value => value === e.currentTarget.value);
+          if (next) setQueue(next);
+        }}>
+          {queues.map(value => <option key={value} value={value}>{value === "all" ? (zh ? "所有對話" : "All conversations") : value === "due" ? (zh ? "待跟進" : "Follow-ups due") : threadStateLabel(value, zh)}</option>)}
+        </select>}
       </header>
       <div className="waba-list-scroll">
+      {workError && queue !== "due" && <ErrorNotice bare onRetry={() => { void page(null, true); }}>{zh ? "無法載入跟進狀態。" : "Couldn’t refresh conversation work."}</ErrorNotice>}
+      {openError && <ErrorNotice bare>{zh ? "無法開啟對話。請檢查已連結帳戶。" : "Couldn’t open that conversation. Check the linked account."}</ErrorNotice>}
+      {browse.page?.state === "failed" && <ErrorNotice bare onRetry={() => { void browse.load(browse.page?.cursor); }}>{zh ? "無法讀取搜尋結果。" : "Couldn’t read those results."}</ErrorNotice>}
       {list === "indexing" && rows.length > 0 && <p className="waba-muted" role="status">{zh ? "正在整理較早的對話…" : "Indexing older conversations…"}</p>}
       {(list === "loading" || list === "indexing") && !rows.length ? <Loading>{list === "indexing" ? (zh ? "正在整理較早的對話…" : "Indexing older conversations…") : (zh ? "正在載入對話…" : "Loading conversations…")}</Loading>
         : failed ? <>
@@ -134,30 +234,50 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
           <Button size="sm" variant="ghost" disabled={replyDirty} onClick={() => { setSettingsError(false); void openSettings().catch(() => setSettingsError(true)); }}>{zh ? "開啟設定" : "Open Settings"}</Button>
           {settingsError && <ErrorNotice bare>{zh ? "請在側欄選取設定。" : "Choose Settings in the sidebar."}</ErrorNotice>}
         </>
-        : !shown.length ? <EmptyState title={needle ? (zh ? "找不到符合的對話" : "No matching conversations") : (zh ? "暫未有對話" : "No conversations yet")} name="conversations">
-            {needle ? (cursor ? (zh ? "搜尋只涵蓋已載入的對話。你可以載入更多。" : "Search covers loaded conversations. Load more to widen it.") : (zh ? "清除或變更搜尋字詞。" : "Try a different search.")) : (zh ? "新的 WhatsApp 對話會在這裏顯示。" : "New WhatsApp conversations will appear here.")}
+        : !shown.length && !extras.length && browse.page?.state === "loading" ? <Loading>{browseLabel}</Loading>
+        : !shown.length && !extras.length && browse.page?.state !== "failed" ? <EmptyState title={queue === "due" ? (zh ? "沒有待跟進事項" : "No follow-ups due") : needle || queue !== "all" ? (zh ? "找不到符合的對話" : "No matching conversations") : (zh ? "暫未有對話" : "No conversations yet")} name="conversations">
+            {cursor && queue !== "due" && (needle || queue !== "all") ? (zh ? "可載入更多對話以查看較早結果。" : "Load more conversations to check older results.")
+              : queue === "due" ? (zh ? "跟進日期到期時，對話會在這裏出現。" : "Conversations appear here when their follow-up date is due.")
+              : !needle && queue === "all" ? (zh ? "新的 WhatsApp 對話會在這裏顯示。" : "New WhatsApp conversations will appear here.") : undefined}
           </EmptyState>
         : <ul className="waba-rows">{shown.map(r => {
           const phone = contactPhone(r, linked);
-          const name = contactName(r, phone, linked, zh), at = stamp(r.lastMessage?.createdAt ?? null);
-          const reference = linked && !r.contact.name && !phone ? contactReference(r) : null;
+          const record = recordFor(r);
+          const name = contactName(r, phone, linked, zh, record?.name), at = stamp(r.lastMessage?.createdAt ?? null);
+          const state = r.work && work.checked.has(r.work.ref) ? effectiveThreadState(record, r.work.inboundVersion) : null;
+          const flag = record?.due && record.due <= dueDay ? dueLabel(record.due, dueDay, zh)
+            : state && state !== "needs_reply" ? threadStateLabel(state, zh) : null;
           const unread = r.unreadCount ?? 0;
           return <li key={r.conversationId}>
-            <button type="button" className="waba-row" disabled={replyDirty} aria-current={r.conversationId === selected ? "true" : undefined} data-unread={unread > 0 ? "yes" : undefined} onClick={e => { openRow.current = e.currentTarget; select(r.conversationId); }}>
+            <button type="button" className="waba-row" disabled={replyDirty || opening} aria-current={r.conversationId === selected ? "true" : undefined} data-unread={unread > 0 ? "yes" : undefined} onClick={e => { openRow.current = e.currentTarget; select(r.conversationId); }}>
               <Avatar name={name} />
-              <span className="waba-row-name"><span className="waba-row-title">{name}</span>{reference && <span className="waba-row-ref" aria-label={zh ? `聯絡人編號末四位 ${reference}` : `Contact reference ending ${reference}`}>· {reference}</span>}</span>
+              <span className="waba-row-name"><span className="waba-row-title">{name}</span></span>
               {at === null ? <span /> : <time className="waba-row-time" dateTime={r.lastMessage?.createdAt ?? undefined}>{dayFormat[locale].format(at) === today ? timeFormat[locale].format(at) : listDate[locale].format(at)}</time>}
               <span className="waba-row-last">{r.lastMessage?.direction === "outbound" ? (zh ? "你：" : "You: ") : ""}{r.lastMessage?.body ?? ""}</span>
               {unread > 0 && <span className="waba-badge" aria-label={zh ? `${unread} 則未讀訊息` : `${unread} unread`}>{unread > 99 ? "99+" : unread}</span>}
+              {flag && <span className="waba-row-flag">{flag}</span>}
+            </button>
+          </li>;
+        })}{extras.map(record => {
+          const known = pageByRef.get(record.ref);
+          const name = record.name ?? (known ? contactName(known, contactPhone(known, linked), linked, zh) : (zh ? "WhatsApp 聯絡人" : "WhatsApp contact"));
+          return <li key={record.ref}>
+            <button type="button" className="waba-row" aria-disabled={opening || undefined} disabled={replyDirty} aria-current={selected && (known?.conversationId === selected || resolved?.work?.ref === record.ref) ? "true" : undefined}
+              onClick={e => { remember(record); void openWork(record.ref, e.currentTarget); }}>
+              <Avatar name={name} />
+              <span className="waba-row-name"><span className="waba-row-title">{name}</span></span>
+              <span />
+              <span className="waba-row-last">{record.due ? `${dueLabel(record.due, dueDay, zh)} · ${record.due}` : (zh ? "已儲存的對話名稱" : "Saved conversation name")}</span>
             </button>
           </li>;
         })}</ul>}
-        {cursor && !failed && <div className="waba-page-more"><Button size="sm" onClick={() => { void page(cursor); }} loading={list === "more" || list === "indexing"}>{zh ? "載入更多" : "Load more"}</Button></div>}
+        {cursor && !failed && queue !== "due" && <div className="waba-page-more"><Button size="sm" loading={list === "more" || list === "indexing"} onClick={() => { void page(cursor); }}>{zh ? "載入更多" : "Load more"}</Button></div>}
+        {browse.page?.cursor && browse.page.state !== "failed" && <div className="waba-page-more"><Button size="sm" loading={browse.page.state === "loading"} onClick={() => { void browse.load(browse.page?.cursor); }}>{zh ? "更多結果" : "More results"}</Button></div>}
       </div>
     </div>
     <div ref={thread} className="waba-thread">
       {newMessage ? <NewLinkedReply scope={scope} dirty={replyDirty} onDirtyChange={onDirtyChange} onBack={() => select(null)} onChanged={() => { void page(null, true); }} />
-        : selected ? <Thread key={selected} scope={scope} id={selected} canReply={canReply} canTemplate={canTemplate} assist={assist} handoff={handoff} onRecipient={onRecipient} onDirtyChange={onDirtyChange} onBack={() => select(null)} replyDirty={replyDirty} />
+        : selected ? <Thread key={selected} scope={scope} id={selected} initial={resolved} inboxScope={inboxScope} work={work} onWork={remember} canReply={canReply} canTemplate={canTemplate} assist={assist} handoff={handoff} onRecipient={onRecipient} onDirtyChange={onDirtyChange} onBack={() => select(null)} replyDirty={replyDirty} />
         : <div className="waba-thread-empty">
             <p><strong>{zh ? "選擇對話" : "Select a conversation"}</strong></p>
             <p className="waba-muted">{zh ? "打開對話以查看記錄及回覆。" : "Open a conversation to read and reply."}</p>
@@ -187,10 +307,14 @@ function NewLinkedReply({ scope, dirty, onDirtyChange, onBack, onChanged }: { sc
   </article>;
 }
 
-function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient, onDirtyChange, onBack, replyDirty }: { scope: DisplayScope; id: string; canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; onRecipient: (r: Recipient) => void; onDirtyChange: (dirty: boolean) => void; onBack: () => void; replyDirty: boolean }) {
+function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTemplate, assist, handoff, onRecipient, onDirtyChange, onBack, replyDirty }: {
+  scope: DisplayScope; id: string; initial: Conversation | null; inboxScope: string | null; work: WorkIndex; onWork: (record: ThreadWork) => void;
+  canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; onRecipient: (r: Recipient) => void;
+  onDirtyChange: (dirty: boolean) => void; onBack: () => void; replyDirty: boolean;
+}) {
   const zh = useScope()?.presentationLocale === "zh-TW";
   const unavailablePreview = zh ? "無法顯示預覽" : "Preview unavailable";
-  const [conversation, setConversation] = useState<Load<Conversation>>({ state: "loading" });
+  const [conversation, setConversation] = useState<Load<Conversation>>(() => initial?.conversationId === id ? { state: "ok", value: initial } : { state: "loading" });
   const [messages, setMessages] = useState<Load<{ rows: Message[]; cursor: string | null }>>({ state: "loading" });
   const [indexing, setIndexing] = useState(false);
   const messageRequest = useRef(0);
@@ -200,6 +324,17 @@ function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient
   const prependHeight = useRef<number | null>(null);
   const [showLatest, setShowLatest] = useState(false);
   const [details, setDetails] = useState(false);
+  const replyEdited = useRef(false), workEdited = useRef(false);
+  const [workDirty, setWorkDirty] = useState(false);
+  const onReplyDirty = useCallback((dirty: boolean) => {
+    replyEdited.current = dirty;
+    onDirtyChange(dirty || workEdited.current);
+  }, [onDirtyChange]);
+  const onWorkDirty = useCallback((dirty: boolean) => {
+    workEdited.current = dirty;
+    setWorkDirty(dirty);
+    onDirtyChange(dirty || replyEdited.current);
+  }, [onDirtyChange]);
   const detailsButton = useRef<HTMLButtonElement>(null);
   const closeDetailsButton = useRef<HTMLButtonElement>(null);
   function jumpToLatest() {
@@ -211,6 +346,7 @@ function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient
     setShowLatest(false);
   }
   function closeDetails() {
+    if (workEdited.current) return;
     setDetails(false);
     detailsButton.current?.focus({ preventScroll: true });
   }
@@ -235,7 +371,11 @@ function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient
   // `quiet` is a host-push refresh: shown data stays on a failed read, and
   // messages already loaded stay (newer rows win by id).
   const show = useCallback(async (quiet = false) => {
-    try { setConversation({ state: "ok", value: parseConversation(await serviceCall(scope, "whatsapp.conversations.show", { conversation_id: id })) }); }
+    try {
+      const next = parseConversation(await serviceCall(scope, "whatsapp.conversations.show", { conversation_id: id }));
+      if (next.conversationId !== id) throw new ApiError("The conversation identity changed", 502);
+      setConversation({ state: "ok", value: next });
+    }
     catch (e) { setConversation(c => quiet && c.state === "ok" ? c : { state: "failed", text: errorText(e, "The conversation could not be read.") }); }
   }, [scope, id]);
   const read = useCallback(async (after: string | null = null, quiet = false) => {
@@ -275,7 +415,10 @@ function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient
     return () => clearInterval(t);
   }, [readDraft, assist.show]);
   const reload = useCallback(() => { void show(); void read(); void readDraft(); }, [show, read, readDraft]);
-  useEffect(() => { reload(); return () => { messageRequest.current++; foregroundMessages.current = false; }; }, [reload]);
+  useEffect(() => {
+    if (initial?.conversationId === id) { void read(); void readDraft(); } else reload();
+    return () => { messageRequest.current++; foregroundMessages.current = false; };
+  }, [reload, read, readDraft, initial, id]);
   async function discard() {
     setAssistNote(null);
     try { await serviceCall(scope, "whatsapp.draft.discard", { conversation_id: id }); setDraft(null); }
@@ -290,11 +433,13 @@ function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient
     : [], [messages]);
   const linked = scope.provider === "linked";
   const phone = c ? contactPhone(c, linked) : null;
-  const title = c ? contactName(c, phone, linked, zh) : (zh ? "對話" : "Conversation");
+  const workLink = inboxScope && c?.work && validWorkRef(c.work.ref, inboxScope) ? c.work : null;
+  const record = workLink ? work.records.get(workLink.ref) : undefined;
+  const title = c ? contactName(c, phone, linked, zh, record?.name) : (zh ? "對話" : "Conversation");
   const group = linked && id.endsWith("@g.us");
   const reference = linked && c && !phone ? contactReference(c) : null;
   const subtitle = group ? (zh ? "WhatsApp 群組" : "WhatsApp group")
-    : phone ?? (reference ? (zh ? `聯絡人編號末四位 ${reference}` : `Contact ref. ending ${reference}`) : null);
+    : phone ?? (zh ? "未有電話號碼" : "Phone not available");
   const photos = details ? ordered.filter(m => m.previewJpeg !== null) : [];
   const locale = zh ? "zh" : "en";
   const day = dayFormat[locale], time = timeFormat[locale];
@@ -315,6 +460,7 @@ function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient
           <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M7.5 3v10m-4-10h9A1.5 1.5 0 0 1 14 4.5v7a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5v-7A1.5 1.5 0 0 1 3.5 3Z" /></svg>
         </button> : title}
       </h2>
+      {workLink && work.checked.has(workLink.ref) && <span className="waba-work-state">{threadStateLabel(effectiveThreadState(record, workLink.inboundVersion), zh)}</span>}
     </header>
     <div className="waba-conversation-body">
       <div className="waba-thread-main">
@@ -362,21 +508,22 @@ function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient
           <TakeoverBar scope={scope} id={id} handoffAt={c.handoffAt} rights={handoff} onChanged={() => { void show(); }} />
           {assist.brief && <Brief scope={scope} id={id} canOpen={assist.open} />}
           {draft && <DraftChip draft={draft} canInsert={canReply && windowOpen(c)} canDiscard={assist.discard} note={assistNote} onInsert={() => setInserted(i => ({ text: draft.text, n: (i?.n ?? 0) + 1 }))} onDiscard={() => { void discard(); }} />}
-          {canReply ? <Composer scope={scope} conversationId={c.conversationId} handoffAt={c.handoffAt} freeformUntil={c.freeformUntil} open={scope.provider === "linked" || windowOpen(c)} autoTakeover={handoff.set} inserted={inserted} onSent={onSent} onChanged={reload} onDirtyChange={onDirtyChange} />
+          {canReply ? <Composer scope={scope} conversationId={c.conversationId} handoffAt={c.handoffAt} freeformUntil={c.freeformUntil} open={scope.provider === "linked" || windowOpen(c)} autoTakeover={handoff.set} inserted={inserted} onSent={onSent} onChanged={reload} onDirtyChange={onReplyDirty} />
             : <Notice state="read-only">You can read this inbox. Only the workspace operator can reply.</Notice>}
           {canTemplate && <Button size="sm" disabled={replyDirty} onClick={() => onRecipient(c)}>{zh ? "使用已核准的範本…" : "Send an approved template…"}</Button>}
         </footer>}
       </div>
       {c && <aside id="waba-contact-details" className="waba-contact-details" aria-labelledby="waba-contact-title" hidden={!details}>
-        <header className="waba-head"><h3 id="waba-contact-title">{group ? (zh ? "群組詳情" : "Group details") : (zh ? "聯絡人詳情" : "Contact details")}</h3><button className="btn" type="button" ref={closeDetailsButton} onClick={closeDetails}>{zh ? "關閉" : "Close"}</button></header>
+        <header className="waba-head"><h3 id="waba-contact-title">{group ? (zh ? "群組詳情" : "Group details") : (zh ? "聯絡人詳情" : "Contact details")}</h3><button className="btn" type="button" ref={closeDetailsButton} disabled={workDirty} onClick={closeDetails}>{zh ? "關閉" : "Close"}</button></header>
         <div className="waba-contact-profile"><Avatar name={title} /><strong>{title}</strong></div>
         <dl className="waba-contact-facts">
           {group ? <div><dt>{zh ? "類型" : "Type"}</dt><dd>{subtitle}</dd></div> : <div><dt>{zh ? "電話" : "Phone"}</dt>
-            <dd>{phone ? <bdi>{phone}</bdi> : <span className="waba-muted">{zh ? "WhatsApp 未提供電話號碼" : "Not shared by WhatsApp"}</span>}</dd></div>}
+            <dd>{phone ? <bdi>{phone}</bdi> : <span className="waba-muted">{zh ? "未有電話號碼" : "Phone not available"}</span>}</dd></div>}
           {reference && <div><dt>{zh ? "聯絡人編號末四位" : "Contact reference ending"}</dt><dd>{reference}</dd></div>}
           {c.status && <div><dt>{zh ? "狀態" : "Status"}</dt><dd>{c.status}</dd></div>}
           {c.lastInboundAt && <div><dt>{zh ? "最後收到訊息" : "Last inbound"}</dt><dd>{when(c.lastInboundAt)}</dd></div>}
         </dl>
+        {details && workLink && <ContactWork key={workLink.ref} scope={scope} link={workLink} zh={zh} onSaved={onWork} onDirty={onWorkDirty} />}
         <section aria-label={zh ? "已分享的媒體" : "Shared media"}>
           <h4>{zh ? "已分享的媒體" : "Shared media"}</h4>
           {photos.length ? <ul className="waba-contact-media">{photos.map(m => <li key={m.id}><PhotoPreview jpeg={m.previewJpeg!} label={zh ? "相片預覽" : "Photo preview"} unavailable={unavailablePreview} /></li>)}</ul>

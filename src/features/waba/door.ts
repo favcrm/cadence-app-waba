@@ -1,4 +1,5 @@
 import { ApiError } from "@cadence/screen-ui";
+import { validInboxScope,validWorkRef } from "./inboxWork";
 /** Door answers (`agenticos.whatsapp-door.v1`, design §3) as the host relays
  *  them. Reads are display data only: every authority check stays host-side. */
 export interface Status {
@@ -6,10 +7,12 @@ export interface Status {
   webhook: { subscribed: boolean | null; status: string | null; error: string | null; fields: string[] } | null; observedAt: string | null;
 }
 export interface ConnectSession { url: string; expiresAt: string | null }
+export type WorkLink = { ref: string; inboundVersion: number };
 export interface ConversationRow {
   conversationId: string; contact: { name: string | null; phone: string | null };
   lastMessage: { direction: string | null; body: string | null; createdAt: string | null } | null;
   unreadCount: number | null; replyMode: string | null; freeformUntil: string | null;
+  work: WorkLink | null;
 }
 export interface Conversation extends ConversationRow { status: string | null; lastInboundAt: string | null; handoffAt: string | null }
 export interface Message { id: string; direction: string | null; body: string | null; status: string | null; senderType: string | null; createdAt: string | null; type: string | null; previewJpeg: string | null }
@@ -47,16 +50,21 @@ export function parseConnect(v: unknown): ConnectSession {
 function row(v: unknown): ConversationRow {
   if (!obj(v) || !str(v.conversationId)) bad();
   const c = obj(v.contact) ? v.contact : {}, m = obj(v.lastMessage) ? v.lastMessage : null;
+  const work = validWorkRef(v.workRef) && typeof v.inboundVersion === "number" && Number.isSafeInteger(v.inboundVersion) && v.inboundVersion >= 0
+    ? { ref: v.workRef, inboundVersion: v.inboundVersion } : null;
   return {
     conversationId: v.conversationId as string, contact: { name: str(c.name), phone: str(c.phone) },
     lastMessage: m && { direction: str(m.direction), body: str(m.body), createdAt: str(m.createdAt) },
-    unreadCount: num(v.unreadCount), replyMode: str(v.replyMode), freeformUntil: str(v.freeformUntil),
+    unreadCount: num(v.unreadCount), replyMode: str(v.replyMode), freeformUntil: str(v.freeformUntil), work,
   };
 }
-export function parseConversations(v: unknown): Page<ConversationRow> {
+export function parseConversations(v: unknown): Page<ConversationRow> & { inboxScope: string | null } {
   const d = door(v);
   if (!Array.isArray(d.conversations)) bad();
-  return { rows: d.conversations.map(row), cursor: str(d.cursor) };
+  const rows = d.conversations.map(row);
+  const candidate = d.inboxScope;
+  const inboxScope = validInboxScope(candidate) && rows.every(r => r.work && validWorkRef(r.work.ref, candidate)) ? candidate : null;
+  return { rows, cursor: str(d.cursor), inboxScope };
 }
 export function parseConversation(v: unknown): Conversation {
   const d = door(v);

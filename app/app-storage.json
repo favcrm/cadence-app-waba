@@ -2,14 +2,65 @@
   "contract": "app-storage/v1",
   "app": "waba",
   "record_kind": "inbox_settings",
-  "schema_version": 1,
-  "compatible_schema_versions": [1],
+  "schema_version": 2,
+  "compatible_schema_versions": [1, 2],
   "default_table": "inbox_settings",
+  "tables": {
+    "inbox_work": {
+      "read_role": "owner",
+      "immutable_columns": ["inbox_scope", "thread_ref"],
+      "search_columns": ["display_name"],
+      "write_schema": {
+        "type": "object",
+        "required": ["after"],
+        "properties": {
+          "after": {
+            "type": "object",
+            "properties": {
+              "inbox_scope": { "type": "string", "pattern": "^[abcdef0-9_lw]{35}$" },
+              "thread_ref": { "type": "string", "pattern": "^[abcdef0-9_lw]{100}$" },
+              "display_name": { "anyOf": [{ "type": "string", "maxLength": 100 }, { "type": "null" }] },
+              "state": { "enum": ["needs_reply", "waiting", "done"] },
+              "follow_up_on": { "anyOf": [{ "type": "string", "pattern": "^[0-9-]{10}$" }, { "type": "null" }] },
+              "seen_inbound": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+            },
+            "required": ["inbox_scope", "thread_ref", "display_name", "state", "follow_up_on", "seen_inbound"],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "inbox_notes": {
+      "read_role": "owner",
+      "append_only": true,
+      "write_schema": {
+        "type": "object",
+        "required": ["after"],
+        "properties": {
+          "after": {
+            "type": "object",
+            "properties": {
+              "thread_ref": { "type": "string", "pattern": "^[abcdef0-9_lw]{100}$" },
+              "body": { "type": "string", "minLength": 1, "maxLength": 1000 },
+              "noted_at": { "type": "integer", "minimum": 0, "maximum": 8640000000000000 }
+            },
+            "required": ["thread_ref", "body", "noted_at"],
+            "additionalProperties": false
+          }
+        }
+      }
+    }
+  },
   "migrations": [
     {
       "version": 1,
       "path": "storage/001-settings.json",
       "sha256": "sha256:7cbf5b03c072fe4f011656e92b6031b46e1e95f8c3b4483c9e44429b8d6ef341"
+    },
+    {
+      "version": 2,
+      "path": "storage/002-inbox-work.json",
+      "sha256": "sha256:63929f698a1369ef79b4350937580770b591347a7e1ab727c2bcf0a8a89f91c2"
     }
   ]
 }

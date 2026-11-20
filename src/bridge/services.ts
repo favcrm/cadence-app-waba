@@ -8,9 +8,10 @@ type Bag = Record<string, unknown>;
  *  No key, digest, company or connection field exists: the host derives each
  *  of them. */
 export interface CallArgs {
-  "records.show": { record_id: string };
-  "records.create": { record_id: string; profile: { provider: "official" | "linked"; reply_mode: "copilot" | "human-only" } };
-  "records.update": CallArgs["records.create"] & { expected_revision: number };
+  "records.list": { table: "inbox_work" | "inbox_notes"; filters: { field: string; op: "eq" | "in" | "lte" | "gte" | "contains"; value: string | string[] }[]; limit?: number; cursor?: string; order_by?: { field: string; direction?: "asc" | "desc" } };
+  "records.show": { record_id: string; table?: "inbox_work" | "inbox_notes" };
+  "records.create": { record_id: string; profile: { provider: "official" | "linked"; reply_mode: "copilot" | "human-only" }; table?: never } | { record_id: string; table: "inbox_work"; profile: { inbox_scope: string; thread_ref: string; display_name: string | null; state: "needs_reply" | "waiting" | "done"; follow_up_on: string | null; seen_inbound: number } } | { record_id: string; table: "inbox_notes"; profile: { thread_ref: string; body: string; noted_at: number } };
+  "records.update": (Exclude<CallArgs["records.create"], { table: "inbox_notes" }>) & { expected_revision: number };
   "whatsapp.status": Bag;
   "whatsapp.connect_session": Bag;
   "whatsapp.conversations.list": { cursor?: string; limit?: number };
@@ -52,8 +53,9 @@ export interface SlotArgs {
 }
 // A closed field allowlist is checked again at runtime before serialization.
 export const CALL_FIELDS: Record<keyof CallArgs, readonly string[]> = {
-  "records.show": ["record_id"], "records.create": ["record_id", "profile"],
-  "records.update": ["record_id", "profile", "expected_revision"],
+  "records.list": ["table", "filters", "limit", "cursor", "order_by"],
+  "records.show": ["record_id", "table"], "records.create": ["record_id", "profile", "table"],
+  "records.update": ["record_id", "profile", "expected_revision", "table"],
   "whatsapp.status": [], "whatsapp.connect_session": [],
   "whatsapp.conversations.list": ["cursor", "limit"], "whatsapp.conversations.show": ["conversation_id"],
   "whatsapp.messages": ["conversation_id", "cursor", "limit"],
@@ -80,7 +82,7 @@ const LINKED_CALLS = new Set(["whatsapp.status", "whatsapp.connect_session", "wh
 const LINKED_SLOTS = new Set(["whatsapp.reply.send"]);
 function providerArgs(scope: DisplayScope, verb: string, args: Bag, slot: boolean): Bag {
   const clean = cleanArgs(verb, args, slot);
-  if (scope.provider !== "linked") return clean;
+  if (scope.provider !== "linked" || verb.startsWith("records.")) return clean;
   if (!(slot ? LINKED_SLOTS : LINKED_CALLS).has(verb)) throw new ApiError("This operation is not available for linked devices.", 400);
   return { ...clean, provider: "linked" };
 }
