@@ -1,7 +1,7 @@
 ---
 app: waba
 title: WhatsApp Business
-version: '0.3.5'
+version: '0.3.6'
 summary: Use the official WhatsApp Business connection or a test-only linked device for the inbox and owner-approved replies. The app holds no credentials.
 needs:
   connections: []
@@ -75,9 +75,10 @@ Those tools are not shown for linked devices. Old tool URLs open the Inbox.
   WhatsApp server ACK is recorded; acceptance does not confirm delivery.
   Never retry an uncertain send automatically.
   Replies are text only; inbound photo previews do not support uploads.
-- **Contact details (linked device on supported hosts).** Click the chat
-  header to see the full phone number when WhatsApp provides it. Owners
-  can save a shared name, add a private note, choose Needs reply, Waiting
+- **Contact details (linked device on supported hosts).** Full phone numbers
+  appear beside saved names in the list and under the chat title when the
+  paired account knows them. A group or an opaque ID is not a phone number.
+  Owners can save a shared name, add a private note, choose Needs reply, Waiting
   or Done, and set a follow-up date. Use Search to find saved names and
   **Follow-ups due** to find reminders, including older conversations.
   New inbound messages reopen a waiting or done conversation when the

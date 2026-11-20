@@ -19,21 +19,27 @@ type Load<T> = { state: "loading" } | { state: "ok"; value: T } | { state: "fail
 
 function contactPhone(row: ConversationRow, linked: boolean) {
   if (linked && row.conversationId.endsWith("@g.us")) return null;
-  if (row.contact.phone) return row.contact.phone;
-  // An opaque @lid identifier is not a phone number.
-  const address = linked ? /^([1-9]\d{7,14})@s\.whatsapp\.net$/.exec(row.conversationId) : null;
+  if (!linked) return row.contact.phone;
+  if (row.contact.phone && /^\+[1-9]\d{7,14}$/.test(row.contact.phone)) return row.contact.phone;
+  // Older hosts may omit the phone. Only a phone-addressed JID proves it.
+  const address = /^([1-9]\d{7,14})(?::\d{1,5})?@s\.whatsapp\.net$/.exec(row.conversationId);
   return address ? `+${address[1]}` : null;
 }
+
+const phoneUnavailable = (zh: boolean) => zh ? "未有電話號碼" : "Phone not available";
 
 function contactName(row: ConversationRow, phone: string | null, linked: boolean, zh: boolean, name?: string | null) {
   const display = name || row.contact.name;
   if (display) return display;
   if (linked && row.conversationId.endsWith("@g.us")) return zh ? "WhatsApp 群組" : "WhatsApp group";
-  return phone ?? (linked ? (zh ? "WhatsApp 聯絡人" : "WhatsApp contact") : (zh ? "未知聯絡人" : "Unknown contact"));
+  return phone ?? (linked ? phoneUnavailable(zh) : (zh ? "未知聯絡人" : "Unknown contact"));
 }
 
-function contactReference(row: ConversationRow) {
-  return /^(\d+)@lid$/.exec(row.conversationId)?.[1].slice(-4) ?? null;
+function RowIdentity({ name, phone }: { name: string; phone: string | null }) {
+  return <span className="waba-row-name">
+    {name === phone ? <bdi className="waba-row-phone" dir="ltr">{phone}</bdi> : <span className="waba-row-title">{name}</span>}
+    {phone && phone !== name && <bdi className="waba-row-phone waba-muted" dir="ltr">{phone}</bdi>}
+  </span>;
 }
 
 function Avatar({ name }: { name: string }) {
@@ -202,7 +208,10 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
   });
   const pageByRef = useMemo(() => new Map(rows.flatMap(r => r.work ? [[r.work.ref, r] as const] : [])), [rows]);
   const extras = browse.page?.rows.map(row => work.records.get(row.ref) ?? row).filter(r => {
-    if (queue === "due") return !!r.due && r.due <= dueDay && (!needle || (r.name ?? pageByRef.get(r.ref)?.contact.name)?.toLocaleLowerCase().includes(needle));
+    if (queue === "due") {
+      const known = pageByRef.get(r.ref);
+      return !!r.due && r.due <= dueDay && (!needle || [r.name, known?.contact.name, known && contactPhone(known, linked)].some(value => value?.toLocaleLowerCase().includes(needle)));
+    }
     return !pageByRef.has(r.ref) && !!r.name?.toLocaleLowerCase().includes(needle);
   }) ?? [];
   const failed = list === "failed";
@@ -251,7 +260,7 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
           return <li key={r.conversationId}>
             <button type="button" className="waba-row" disabled={replyDirty || opening} aria-current={r.conversationId === selected ? "true" : undefined} data-unread={unread > 0 ? "yes" : undefined} onClick={e => { openRow.current = e.currentTarget; select(r.conversationId); }}>
               <Avatar name={name} />
-              <span className="waba-row-name"><span className="waba-row-title">{name}</span></span>
+              <RowIdentity name={name} phone={linked ? phone : null} />
               {at === null ? <span /> : <time className="waba-row-time" dateTime={r.lastMessage?.createdAt ?? undefined}>{dayFormat[locale].format(at) === today ? timeFormat[locale].format(at) : listDate[locale].format(at)}</time>}
               <span className="waba-row-last">{r.lastMessage?.direction === "outbound" ? (zh ? "你：" : "You: ") : ""}{r.lastMessage?.body ?? ""}</span>
               {unread > 0 && <span className="waba-badge" aria-label={zh ? `${unread} 則未讀訊息` : `${unread} unread`}>{unread > 99 ? "99+" : unread}</span>}
@@ -259,13 +268,14 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
             </button>
           </li>;
         })}{extras.map(record => {
-          const known = pageByRef.get(record.ref);
-          const name = record.name ?? (known ? contactName(known, contactPhone(known, linked), linked, zh) : (zh ? "WhatsApp 聯絡人" : "WhatsApp contact"));
+          const known = pageByRef.get(record.ref) ?? (resolved?.work?.ref === record.ref ? resolved : null);
+          const phone = known ? contactPhone(known, linked) : null;
+          const name = known ? contactName(known, phone, linked, zh, record.name) : record.name ?? (zh ? "較早對話" : "Earlier conversation");
           return <li key={record.ref}>
             <button type="button" className="waba-row" aria-disabled={opening || undefined} disabled={replyDirty} aria-current={selected && (known?.conversationId === selected || resolved?.work?.ref === record.ref) ? "true" : undefined}
               onClick={e => { remember(record); void openWork(record.ref, e.currentTarget); }}>
               <Avatar name={name} />
-              <span className="waba-row-name"><span className="waba-row-title">{name}</span></span>
+              <RowIdentity name={name} phone={phone} />
               <span />
               <span className="waba-row-last">{record.due ? `${dueLabel(record.due, dueDay, zh)} · ${record.due}` : (zh ? "已儲存的對話名稱" : "Saved conversation name")}</span>
             </button>
@@ -437,9 +447,9 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const record = workLink ? work.records.get(workLink.ref) : undefined;
   const title = c ? contactName(c, phone, linked, zh, record?.name) : (zh ? "對話" : "Conversation");
   const group = linked && id.endsWith("@g.us");
-  const reference = linked && c && !phone ? contactReference(c) : null;
-  const subtitle = group ? (zh ? "WhatsApp 群組" : "WhatsApp group")
-    : phone ?? (zh ? "未有電話號碼" : "Phone not available");
+  const subtitle = group ? (zh ? "WhatsApp 群組" : "WhatsApp group") : phone ?? phoneUnavailable(zh);
+  const detailsLabel = zh ? (group ? "群組詳情" : "聯絡人詳情") : (group ? "Group details" : "Contact details");
+  const identity = phone && phone !== title ? `${title}${zh ? "、" : ", "}${phone}` : title;
   const photos = details ? ordered.filter(m => m.previewJpeg !== null) : [];
   const locale = zh ? "zh" : "en";
   const day = dayFormat[locale], time = timeFormat[locale];
@@ -454,9 +464,9 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
     <header className="waba-thread-head">
       <Button size="sm" variant="ghost" className="waba-back" disabled={replyDirty} onClick={onBack}>{zh ? "返回" : "Back"}</Button>
       <h2 id="waba-thread-title" tabIndex={-1}>
-        {c ? <button className="waba-details-trigger" ref={detailsButton} type="button" aria-expanded={details} aria-controls="waba-contact-details" aria-label={zh ? `${title}：${group ? "群組詳情" : "聯絡人詳情"}` : `${title}: ${group ? "Group details" : "Contact details"}`} onClick={() => details ? closeDetails() : setDetails(true)}>
+        {c ? <button className="waba-details-trigger" ref={detailsButton} type="button" aria-expanded={details} aria-controls="waba-contact-details" aria-label={`${identity}${zh ? "：" : ": "}${detailsLabel}`} onClick={() => details ? closeDetails() : setDetails(true)}>
           <Avatar name={title} />
-          <span className="waba-thread-identity">{title}{subtitle && subtitle !== title && <small className="waba-muted">{subtitle}</small>}</span>
+          <span className="waba-thread-identity">{title === phone ? <bdi dir="ltr">{phone}</bdi> : title}{subtitle !== title && <small className="waba-muted">{phone ? <bdi dir="ltr">{phone}</bdi> : subtitle}</small>}</span>
           <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M7.5 3v10m-4-10h9A1.5 1.5 0 0 1 14 4.5v7a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5v-7A1.5 1.5 0 0 1 3.5 3Z" /></svg>
         </button> : title}
       </h2>
@@ -518,8 +528,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
         <div className="waba-contact-profile"><Avatar name={title} /><strong>{title}</strong></div>
         <dl className="waba-contact-facts">
           {group ? <div><dt>{zh ? "類型" : "Type"}</dt><dd>{subtitle}</dd></div> : <div><dt>{zh ? "電話" : "Phone"}</dt>
-            <dd>{phone ? <bdi>{phone}</bdi> : <span className="waba-muted">{zh ? "未有電話號碼" : "Phone not available"}</span>}</dd></div>}
-          {reference && <div><dt>{zh ? "聯絡人編號末四位" : "Contact reference ending"}</dt><dd>{reference}</dd></div>}
+            <dd>{phone ? <bdi dir="ltr">{phone}</bdi> : <span className="waba-muted">{phoneUnavailable(zh)}</span>}</dd></div>}
           {c.status && <div><dt>{zh ? "狀態" : "Status"}</dt><dd>{c.status}</dd></div>}
           {c.lastInboundAt && <div><dt>{zh ? "最後收到訊息" : "Last inbound"}</dt><dd>{when(c.lastInboundAt)}</dd></div>}
         </dl>
