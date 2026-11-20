@@ -72,8 +72,8 @@ async function readWhileIndexing<T>(
   return undefined;
 }
 
-type Queue = "all" | ThreadState | "due";
-const queues = ["all", "needs_reply", "waiting", "done", "due"] as const;
+type Queue = "all" | "unread" | ThreadState | "due";
+const workQueues = ["needs_reply", "waiting", "done", "due"] as const;
 type WorkIndex = { records: Map<string, ThreadWork>; checked: Set<string> };
 const emptyWorkIndex = (): WorkIndex => ({ records: new Map(), checked: new Set() });
 function calendarDay(now: Date) {
@@ -202,9 +202,12 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
   const needle = filter.trim().toLocaleLowerCase();
   const browse = useWorkBrowse(scope, inboxScope, queue === "due" ? "due" : queue === "all" && needle ? "names" : null, queue === "due" ? dueDay : needle);
   const recordFor = (row: ConversationRow) => row.work && inboxScope && validWorkRef(row.work.ref, inboxScope) ? work.records.get(row.work.ref) : undefined;
+  const canFilterUnread = linked || rows.some(row => row.unreadCount !== null);
+  const unreadCount = rows.filter(row => (row.unreadCount ?? 0) > 0).length;
   const shown = queue === "due" ? [] : rows.filter(r => {
     const record = recordFor(r);
-    if (queue !== "all" && (!r.work || !work.checked.has(r.work.ref) || effectiveThreadState(record, r.work.inboundVersion) !== queue)) return false;
+    if (queue === "unread" ? (r.unreadCount ?? 0) <= 0
+      : queue !== "all" && (!r.work || !work.checked.has(r.work.ref) || effectiveThreadState(record, r.work.inboundVersion) !== queue)) return false;
     return !needle || [record?.name, r.contact.name, contactPhone(r, linked), r.lastMessage?.body].some(v => v?.toLocaleLowerCase().includes(needle));
   });
   const pageByRef = useMemo(() => new Map(rows.flatMap(r => r.work ? [[r.work.ref, r] as const] : [])), [rows]);
@@ -226,12 +229,19 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
           {tools}
         </div>
         <input className="field waba-search" type="search" aria-label={zh ? "搜尋對話" : "Search conversations"} placeholder={zh ? "搜尋對話…" : "Search conversations…"} value={filter} onChange={e => setFilter(e.target.value)} />
-        {inboxScope && <select className="field waba-queue" aria-label={zh ? "篩選對話" : "Conversation filter"} value={queue} onChange={e => {
-          const next = queues.find(value => value === e.currentTarget.value);
-          if (next) setQueue(next);
-        }}>
-          {queues.map(value => <option key={value} value={value}>{value === "all" ? (zh ? "所有對話" : "All conversations") : value === "due" ? (zh ? "待跟進" : "Follow-ups due") : threadStateLabel(value, zh)}</option>)}
-        </select>}
+        {(canFilterUnread || inboxScope) && <div className="waba-list-filters" role="group" aria-label={zh ? "篩選對話" : "Filter conversations"}>
+          <button type="button" aria-pressed={queue === "all"} onClick={() => setQueue("all")}>{zh ? "全部" : "All"}</button>
+          {canFilterUnread && <button type="button" aria-pressed={queue === "unread"} onClick={() => setQueue("unread")}>
+            {zh ? "未讀" : "Unread"}{unreadCount > 0 && <span className="waba-unread-count">{unreadCount}</span>}
+          </button>}
+          {inboxScope && <select className="field waba-queue" aria-label={zh ? "按跟進狀態篩選" : "Filter by follow-up"} value={queue === "all" || queue === "unread" ? "" : queue} onChange={e => {
+            const next = workQueues.find(value => value === e.currentTarget.value);
+            setQueue(next ?? "all");
+          }}>
+            <option value="">{zh ? "跟進" : "Follow-up"}</option>
+            {workQueues.map(value => <option key={value} value={value}>{value === "due" ? (zh ? "待跟進" : "Follow-ups due") : threadStateLabel(value, zh)}</option>)}
+          </select>}
+        </div>}
       </header>
       <div className="waba-list-scroll">
       {workError && queue !== "due" && <ErrorNotice bare onRetry={() => { void page(null, true); }}>{zh ? "無法載入跟進狀態。" : "Couldn’t refresh conversation work."}</ErrorNotice>}
