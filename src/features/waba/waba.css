@@ -1,5 +1,15 @@
 /* WhatsApp app layout. Shared controls, tokens and themes come from the SDK. */
 .waba { gap: 0.75rem; }
+.waba-settings { display: grid; gap: 0.875rem; inline-size: min(100%, 45rem); }
+.waba-settings > .waba-head h1 { font-size: var(--text-section); font-weight: 600; }
+.waba-settings .waba-card > .btn { justify-self: start; }
+.waba-linked-status { margin: 0; color: var(--color-ink-300); }
+.waba-connection-picker { display: grid; justify-items: start; gap: 0.375rem; padding: 0.875rem; border: 1px solid var(--color-edge); border-radius: 0.625rem; }
+.waba-connection-picker p { margin: 0; }
+.waba-provider { display: flex; flex-wrap: wrap; gap: 0.375rem 1rem; padding: 0; margin: 0; border: 0; }
+.waba-provider legend { font-weight: 600; }
+.waba-provider label { display: inline-flex; align-items: center; gap: 0.375rem; min-height: 2.25rem; cursor: pointer; }
+.waba-provider input { accent-color: var(--color-accent); }
 .waba-page { display: grid; gap: 0.75rem; align-content: start; min-width: 0; }
 .waba-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; min-width: 0; }
 .waba-head h1, .waba-head h2 { flex: 1 1 10rem; min-width: 0; margin: 0; overflow-wrap: anywhere; }
@@ -11,39 +21,137 @@
 .waba-manual p { margin: 0; }
 .waba-manual input { width: 100%; min-width: 0; font-family: var(--font-mono); }
 
-.waba-inbox { grid-template-columns: minmax(15rem, 22rem) minmax(0, 1fr); align-items: start; }
-.waba-list, .waba-thread { display: grid; gap: 0.5rem; align-content: start; min-width: 0; }
-.waba-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.25rem; }
-.waba-row { display: grid; gap: 0.125rem; width: 100%; text-align: start; padding: 0.5rem; border: 1px solid var(--color-edge); border-radius: 0.375rem; background: none; color: inherit; font: inherit; cursor: pointer; min-width: 0; }
-.waba-row:hover { border-color: var(--color-edge-hover); }
-.waba-row[aria-current="true"] { border-color: var(--color-accent); }
-.waba-row:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
-.waba-row-name { display: flex; align-items: center; gap: 0.375rem; font-weight: 600; overflow-wrap: anywhere; }
-.waba-row-last { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.waba-badge { padding: 0 0.375rem; border-radius: 999px; background: var(--color-accent); color: var(--color-on-accent); font-size: var(--text-micro); }
+.waba:has(.waba-inbox) { height: 100dvh; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.waba-inbox { flex: 1; grid-template: minmax(0, 1fr) / minmax(14rem, 19rem) minmax(0, 1fr); gap: 0; min-height: 0; border: 1px solid var(--color-edge); border-radius: 0.625rem; overflow: hidden; }
+.waba-inbox .waba-list, .waba-inbox .waba-thread { min-width: 0; min-height: 0; }
+.waba-inbox .waba-list { display: grid; grid-template-rows: auto minmax(0, 1fr); border-inline-end: 1px solid var(--color-edge); }
+.waba-inbox .waba-thread { display: grid; grid-template-rows: minmax(0, 1fr); }
+.waba-inbox .waba-thread > .waba-card { overflow: auto; border: 0; }
+.waba-list-head { display: grid; justify-items: stretch; gap: 0.5rem; padding: 0.75rem 0.875rem; border-bottom: 1px solid var(--color-edge); }
+.waba-list-head .waba-head h1 { flex-basis: auto; font-weight: 600; }
+.waba-inbox .waba-search { min-width: 0; width: 100%; }
+.waba-queue { min-width: 0; width: 100%; }
+.waba-tools { position: relative; }
+.waba-tools-trigger { gap: 0.25rem; }
+.waba-tools-list { position: absolute; inset-block-start: calc(100% + 0.25rem); inset-inline-end: 0; z-index: 1; min-inline-size: 9rem; padding: 0.25rem; margin: 0; list-style: none; border: 1px solid var(--color-edge); border-radius: 0.5rem; background: var(--color-ink-900); }
+.waba-tools-list .btn { width: 100%; justify-content: flex-start; white-space: nowrap; }
+.waba-tool-page { display: grid; gap: 0.625rem; min-width: 0; }
+.waba-tool-page > .btn { justify-self: start; }
+.waba-details-trigger:hover, .waba-details-trigger[aria-expanded="true"] { background: var(--color-ink-850); color: inherit; }
+.waba-details-trigger:focus-visible { outline: 2px solid var(--color-accent); }
+.waba-thread-empty { display: grid; place-content: center; gap: 0.25rem; padding: 1rem; text-align: center; }
+.waba-thread-empty p { margin: 0; }
+.waba-list-scroll, .waba-timeline, .waba-contact-details { overflow: auto; overscroll-behavior: contain; min-height: 0; min-width: 0; }
+.waba-list-scroll > :not(.waba-rows) { margin: 0.75rem; }
+.waba-page-more, .waba-history-more { display: flex; justify-content: center; }
+.waba-rows { display: grid; gap: 0.125rem; list-style: none; margin: 0; padding: 0.375rem; }
+.waba-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: 0.625rem; row-gap: 0.125rem; width: 100%; min-width: 0; min-height: 3.625rem; padding: 0.5rem 0.625rem; border: 0; border-inline-start: 2px solid transparent; border-radius: 0.375rem; background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; }
+.waba-row:hover:not(:disabled) { background: var(--color-ink-850); }
+.waba-row[aria-current="true"] { background: color-mix(in srgb, var(--color-accent) 10%, var(--color-ink-900)); border-inline-start-color: var(--color-accent); }
+.waba-row:focus-visible, .waba-timeline:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.waba-row:disabled { cursor: default; }
+.waba-avatar { display: inline-grid; flex: none; place-items: center; width: 2.125rem; aspect-ratio: 1; border-radius: 50%; background: color-mix(in srgb, var(--color-accent) 12%, transparent); color: var(--color-accent); font-size: var(--text-label); font-weight: 600; }
+.waba-row .waba-avatar { grid-row: span 2; background: var(--color-ink-850); color: var(--color-ink-300); }
+.waba-row[aria-current="true"] .waba-avatar { background: color-mix(in srgb, var(--color-accent) 15%, transparent); color: var(--color-accent); }
+.waba-row-name { display: grid; min-width: 0; font-weight: 600; }
+.waba-row-phone { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.waba-row-phone.waba-muted { font-size: var(--text-label); font-weight: 400; }
+.waba-row-time { justify-self: end; color: var(--color-ink-400); font-size: var(--text-micro); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.waba-row-title, .waba-row-last { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.waba-row-last { color: var(--color-ink-400); font-size: var(--text-secondary); }
+.waba-row[data-unread="yes"] .waba-row-last, .waba-row[aria-current="true"] .waba-row-last { color: var(--color-ink-200); }
+.waba-row-last:not(:has(+ .waba-badge)) { grid-column: 2 / -1; }
+.waba-badge { justify-self: end; min-width: 1rem; padding: 0 0.3125rem; border-radius: 999px; background: var(--color-accent); color: var(--color-on-accent); font-size: var(--text-micro); text-align: center; }
+.waba-row-flag { grid-column: 2 / -1; color: var(--color-ink-400); font-size: var(--text-micro); }
 .waba-back { display: none; }
 
+.waba-conversation { --waba-chat-inset: clamp(0.75rem, 2.75vw, 1.75rem); display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; min-width: 0; }
+.waba-thread-head { min-height: 3.75rem; display: flex; gap: 0.5rem; align-items: center; padding: 0.375rem 0.75rem; border-bottom: 1px solid var(--color-edge); }
+.waba-thread-head h2 { flex: 1; min-width: 0; margin: 0; font-size: var(--text-cardtitle); overflow-wrap: anywhere; }
+.waba-details-trigger { display: flex; align-items: center; gap: 0.625rem; max-inline-size: 100%; min-block-size: 2.625rem; padding: 0.25rem 0.5rem; border: 0; border-radius: 0.5rem; background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; }
+.waba-details-trigger svg { flex: none; color: var(--color-ink-400); }
+.waba-thread-identity { min-width: 0; }
+.waba-thread-identity small { display: block; font-weight: 400; }
+.waba-conversation-body { display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); min-height: 0; }
+.waba-conversation[data-details="true"] .waba-conversation-body { grid-template-columns: minmax(0, 1fr) minmax(12rem, 17rem); }
+.waba-thread-main { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: color-mix(in srgb, var(--color-ink-850) 36%, transparent); }
+.waba-history { position: relative; flex: 1; display: grid; grid-template-rows: minmax(0, 1fr); min-height: 0; }
+.waba-timeline { overflow-anchor: none; }
+.waba-timeline-inner { display: grid; gap: 0.75rem; padding: 1rem var(--waba-chat-inset) 0.5rem; }
+.waba-jump { position: absolute; inset-inline-end: var(--waba-chat-inset); bottom: 0.625rem; }
 .waba-messages { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
-.waba-message { display: grid; gap: 0.125rem; max-width: min(36rem, 85%); padding: 0.5rem 0.625rem; border: 1px solid var(--color-edge); border-radius: 0.5rem; justify-self: start; }
-.waba-message[data-direction="outbound"] { justify-self: end; border-color: var(--color-accent); }
+.waba-date { justify-self: center; color: var(--color-ink-400); font-size: var(--text-label); margin-block: 0.375rem; padding: 0.125rem 0.5rem; border-radius: 0.375rem; background: var(--color-ink-850); }
+.waba-message { display: grid; gap: 0.25rem; max-width: 90%; padding: 0.5rem 0.75rem; min-width: 0; border: 1px solid color-mix(in srgb, var(--color-edge) 60%, transparent); background: var(--color-ink-850); border-radius: 0.875rem; border-end-start-radius: 0.25rem; justify-self: start; }
+.waba-message[data-direction="outbound"] { justify-self: end; border-end-start-radius: 0.875rem; border-end-end-radius: 0.25rem; background: color-mix(in srgb, var(--color-accent) 13%, var(--color-ink-850)); border-color: color-mix(in srgb, var(--color-accent) 25%, var(--color-edge)); }
 .waba-message p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.waba-message-meta { display: flex; gap: 0.375rem; justify-content: end; font-size: var(--text-micro); }
+.waba-photo-preview { display: block; inline-size: min(14rem, 100%); aspect-ratio: 4 / 3; object-fit: contain; border-radius: 0.25rem; }
+.waba-message:has(.waba-photo-preview) { inline-size: min(14rem, 86%); }
+.waba-message .waba-photo-preview { inline-size: 100%; }
+.waba-thread-footer { box-sizing: border-box; flex: none; display: grid; gap: 0.5rem; max-height: 55%; overflow: auto; min-width: 0; width: min(100%, 48rem); margin-inline: auto; padding: 0.5rem var(--waba-chat-inset) max(1rem, env(safe-area-inset-bottom)); }
+.waba-thread-footer > button { justify-self: start; }
+.waba-compose-box { display: grid; gap: 0.25rem; min-width: 0; border: 1px solid color-mix(in srgb, var(--color-edge) 70%, transparent); border-radius: 1.125rem; padding: 0.5rem 0.625rem 0.375rem; background: var(--color-ink-850); box-shadow: 0 3px 12px rgb(0 0 0 / 16%); }
+.waba-compose-box:focus-within { border-color: var(--color-accent); }
+.waba-compose-box textarea { display: block; box-sizing: border-box; width: 100%; min-height: 2.25rem; max-height: 8.25rem; field-sizing: content; padding: 0.25rem 0; outline: none; border: 0; background: transparent; color: inherit; resize: none; overflow: auto; }
+.waba-compose-foot { display: flex; align-items: center; gap: 0.5rem; justify-content: space-between; }
+.waba-compose-foot .waba-muted { flex: 1; font-size: var(--text-micro); }
+.waba-compose-send { display: inline-grid; place-items: center; flex: none; width: 2.125rem; aspect-ratio: 1; padding: 0; border-radius: 50%; background: var(--color-accent); color: var(--color-on-accent); cursor: pointer; }
+.waba-compose-send:not(:disabled):hover { filter: brightness(1.12); }
+.waba-compose-send:disabled { background: var(--color-ink-700); color: var(--color-ink-400); cursor: default; }
+.waba-compose-send:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.waba-contact-details { border-inline-start: 1px solid var(--color-edge); padding: 0.875rem; }
+.waba-contact-details[hidden] { display: none; }
+.waba-contact-details > * + * { margin-top: 0.75rem; }
+.waba-contact-details h3 { flex: 1; font-size: var(--text-cardtitle); }
+.waba-contact-details h4 { margin-bottom: 0.375rem; }
+.waba-contact-profile { display: flex; align-items: center; gap: 0.625rem; overflow-wrap: anywhere; padding: 0.75rem; border-radius: 0.75rem; background: var(--color-ink-850); }
+.waba-contact-facts { display: grid; gap: 0.5rem; overflow-wrap: anywhere; }
+.waba-contact-facts dt { color: var(--color-ink-400); font-size: var(--text-label); }
+.waba-work-state { flex: none; color: var(--color-ink-400); font-size: var(--text-secondary); white-space: nowrap; }
+.waba-work-section { border-block-start: 1px solid var(--color-edge); padding-block-start: 0.75rem; }
+.waba-work-section .field { width: 100%; min-width: 0; }
+.waba-work-form { display: grid; gap: 0.5rem; min-width: 0; }
+.waba-work-form textarea { resize: vertical; }
+.waba-work-actions { display: flex; gap: 0.375rem; flex-wrap: wrap; }
+.waba-notes { display: grid; gap: 0.5rem; padding: 0; margin: 0 0 0.625rem; list-style: none; }
+.waba-notes li { padding-block-end: 0.375rem; border-block-end: 1px solid var(--color-edge); }
+.waba-notes time { color: var(--color-ink-400); font-size: var(--text-micro); }
+.waba-notes p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.waba-work-save { margin: 0.375rem 0 0; }
+.waba-contact-media { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.375rem; padding: 0; margin: 0; list-style: none; }
+.waba-contact-media .waba-photo-preview { width: 100%; background: var(--color-ink-850); }
 .waba-assist { display: grid; gap: 0.5rem; min-width: 0; }
 .waba-assist textarea { width: 100%; min-width: 0; resize: vertical; }
 .waba-composer { display: grid; gap: 0.5rem; min-width: 0; }
-.waba-composer textarea { width: 100%; min-width: 0; resize: vertical; }
 .waba-quote { margin: 0.5rem 0; padding-inline-start: 0.625rem; border-inline-start: 2px solid var(--color-edge); white-space: pre-wrap; overflow-wrap: anywhere; }
 
-/* Narrow: one pane at a time; Back returns to the list. */
+/* At tablet widths, details takes over the conversation body, not the host shell. */
+@media (max-width: 64rem) {
+  .waba-conversation[data-details="true"] .waba-conversation-body { grid-template-columns: minmax(0, 1fr); }
+  .waba-conversation[data-details="true"] .waba-thread-main { visibility: hidden; grid-area: 1 / 1; }
+  .waba-conversation[data-details="true"] .waba-contact-details { grid-area: 1 / 1; border-inline-start: 0; }
+}
 @media (max-width: 47.99rem) {
   .waba-inbox { grid-template-columns: minmax(0, 1fr); }
   .waba-inbox[data-selected="yes"] .waba-list { display: none; }
   .waba-inbox[data-selected="no"] .waba-thread { display: none; }
-  .waba-back { display: inline-flex; }
+  .waba-inbox .waba-list { border-inline-end: 0; }
+  .waba-work-state { font-size: var(--text-micro); }
+  .waba-inbox .waba-back { display: inline-flex; }
+  .waba-compose-send { width: 2.625rem; }
+}
+@media (pointer: coarse) {
+  .waba-tools-trigger, .waba-tools-list .btn, .waba-details-trigger, .waba-compose-send { min-block-size: 2.75rem; }
+  .waba-compose-send { min-inline-size: 2.75rem; }
 }
 
 /* Templates and Broadcasts reuse the Inbox list/detail split. */
 .waba-split { grid-template-columns: minmax(15rem, 22rem) minmax(0, 1fr); align-items: start; }
 .waba-split .waba-list, .waba-split .waba-thread { display: grid; gap: 0.5rem; align-content: start; min-width: 0; }
+.waba-split .waba-rows { padding: 0; }
+.waba-record-row { grid-template-columns: minmax(0, 1fr); min-height: 3rem; }
+.waba-record-row .waba-row-title { font-weight: 600; }
+.waba-record-row .waba-row-last:last-child { grid-column: 1; }
 .waba-composer h3 { margin: 0; flex: 1 1 8rem; }
 .waba-check { display: flex; align-items: center; gap: 0.375rem; }
 .waba-pre { white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -52,4 +160,5 @@
   .waba-split { grid-template-columns: minmax(0, 1fr); }
   .waba-split[data-selected="yes"] .waba-list { display: none; }
   .waba-split[data-selected="no"] .waba-thread { display: none; }
+  .waba-split .waba-back { display: inline-flex; }
 }

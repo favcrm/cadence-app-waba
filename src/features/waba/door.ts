@@ -1,4 +1,5 @@
 import { ApiError } from "@cadence/screen-ui";
+import { validInboxScope,validWorkRef } from "./inboxWork";
 /** Door answers (`agenticos.whatsapp-door.v1`, design §3) as the host relays
  *  them. Reads are display data only: every authority check stays host-side. */
 export interface Status {
@@ -6,16 +7,18 @@ export interface Status {
   webhook: { subscribed: boolean | null; status: string | null; error: string | null; fields: string[] } | null; observedAt: string | null;
 }
 export interface ConnectSession { url: string; expiresAt: string | null }
+export type WorkLink = { ref: string; inboundVersion: number };
 export interface ConversationRow {
   conversationId: string; contact: { name: string | null; phone: string | null };
   lastMessage: { direction: string | null; body: string | null; createdAt: string | null } | null;
   unreadCount: number | null; replyMode: string | null; freeformUntil: string | null;
+  work: WorkLink | null;
 }
 export interface Conversation extends ConversationRow { status: string | null; lastInboundAt: string | null; handoffAt: string | null }
-export interface Message { id: string; direction: string | null; body: string | null; status: string | null; senderType: string | null; createdAt: string | null; type: string | null }
+export interface Message { id: string; direction: string | null; body: string | null; status: string | null; senderType: string | null; createdAt: string | null; type: string | null; previewJpeg: string | null }
 export interface Page<T> { rows: T[]; cursor: string | null }
 /** The host's reply states; anything else reads as uncertain. */
-export type ReplyState = "sent" | "pending" | "failed" | "refused" | "uncertain";
+export type ReplyState = "sent" | "accepted" | "pending" | "failed" | "refused" | "uncertain";
 export interface Prepared { effect_id: string; decision: string | null; expires_at: string | null }
 export interface ReplyStatus { state: string; door: string | null }
 
@@ -47,27 +50,37 @@ export function parseConnect(v: unknown): ConnectSession {
 function row(v: unknown): ConversationRow {
   if (!obj(v) || !str(v.conversationId)) bad();
   const c = obj(v.contact) ? v.contact : {}, m = obj(v.lastMessage) ? v.lastMessage : null;
+  const work = validWorkRef(v.workRef) && typeof v.inboundVersion === "number" && Number.isSafeInteger(v.inboundVersion) && v.inboundVersion >= 0
+    ? { ref: v.workRef, inboundVersion: v.inboundVersion } : null;
   return {
     conversationId: v.conversationId as string, contact: { name: str(c.name), phone: str(c.phone) },
     lastMessage: m && { direction: str(m.direction), body: str(m.body), createdAt: str(m.createdAt) },
-    unreadCount: num(v.unreadCount), replyMode: str(v.replyMode), freeformUntil: str(v.freeformUntil),
+    unreadCount: num(v.unreadCount), replyMode: str(v.replyMode), freeformUntil: str(v.freeformUntil), work,
   };
 }
-export function parseConversations(v: unknown): Page<ConversationRow> {
+export function parseConversations(v: unknown): Page<ConversationRow> & { inboxScope: string | null } {
   const d = door(v);
   if (!Array.isArray(d.conversations)) bad();
-  return { rows: d.conversations.map(row), cursor: str(d.cursor) };
+  const rows = d.conversations.map(row);
+  const candidate = d.inboxScope;
+  const inboxScope = validInboxScope(candidate) && rows.every(r => r.work && validWorkRef(r.work.ref, candidate)) ? candidate : null;
+  return { rows, cursor: str(d.cursor), inboxScope };
 }
 export function parseConversation(v: unknown): Conversation {
   const d = door(v);
   return { ...row({ ...d, lastMessage: null }), status: str(d.status), lastInboundAt: str(d.lastInboundAt), handoffAt: str(d.handoffAt) };
+}
+function previewJpeg(value: unknown): string | null {
+  // Do not accept a provider URL or a MIME type from a message payload.
+  return typeof value === "string" && value.length <= 21_848 && value.length % 4 === 0 &&
+    value.startsWith("/9j/") && /^[A-Za-z0-9+/]+={0,2}$/.test(value) ? value : null;
 }
 export function parseMessages(v: unknown): Page<Message> {
   const d = door(v);
   if (!Array.isArray(d.messages)) bad();
   return { rows: d.messages.map(m => {
     if (!obj(m) || !str(m.id)) bad();
-    return { id: m.id as string, direction: str(m.direction), body: str(m.body), status: str(m.status), senderType: str(m.senderType), createdAt: str(m.createdAt), type: str(m.type) };
+    return { id: m.id as string, direction: str(m.direction), body: str(m.body), status: str(m.status), senderType: str(m.senderType), createdAt: str(m.createdAt), type: str(m.type), previewJpeg: previewJpeg(m.previewJpeg) };
   }), cursor: str(d.cursor) };
 }
 export function parsePrepared(v: unknown): Prepared {
@@ -77,7 +90,7 @@ export function parsePrepared(v: unknown): Prepared {
 /** A send answer. Fails closed: only an explicit known state is taken. */
 export function sendState(v: unknown): ReplyState {
   const s = obj(v) && obj(v.reply) ? v.reply.state : null;
-  return s === "sent" || s === "pending" || s === "failed" || s === "refused" ? s : "uncertain";
+  return s === "sent" || s === "accepted" || s === "pending" || s === "failed" || s === "refused" ? s : "uncertain";
 }
 export function parseReplyStatus(v: unknown): ReplyStatus {
   if (!obj(v) || typeof v.state !== "string") bad();
@@ -116,6 +129,7 @@ const REFUSALS: Record<string, string> = {
   facts_changed: "The takeover changed since this card opened. Check the conversation before trying again.",
   favcrm_unavailable: "FavCRM is not answering right now. Try again in a moment.",
   favcrm_not_bound: "This workspace is not connected to FavCRM. Connect it, then try again.",
+  not_granted: "Linked-device access is not enabled. Ask a platform administrator to grant access.",
   conversation_not_found: "FavCRM could not find this conversation. Refresh the Inbox.",
 };
 export function errorText(error: unknown, fallback: string): string {

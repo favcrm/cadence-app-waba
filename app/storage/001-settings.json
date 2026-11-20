@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "operations": [
+    {
+      "op": "create_table",
+      "table": "inbox_settings",
+      "columns": [
+        { "name": "provider", "type": "text", "nullable": false, "enum": ["official", "linked"] },
+        { "name": "reply_mode", "type": "text", "nullable": false, "enum": ["copilot", "human-only"] }
+      ]
+    }
+  ]
+}
