@@ -8,6 +8,9 @@ type Bag = Record<string, unknown>;
  *  No key, digest, company or connection field exists: the host derives each
  *  of them. */
 export interface CallArgs {
+  "records.show": { record_id: string };
+  "records.create": { record_id: string; profile: { provider: "official" | "linked"; reply_mode: "copilot" | "human-only" } };
+  "records.update": CallArgs["records.create"] & { expected_revision: number };
   "whatsapp.status": Bag;
   "whatsapp.connect_session": Bag;
   "whatsapp.conversations.list": { cursor?: string; limit?: number };
@@ -49,6 +52,8 @@ export interface SlotArgs {
 }
 // A closed field allowlist is checked again at runtime before serialization.
 export const CALL_FIELDS: Record<keyof CallArgs, readonly string[]> = {
+  "records.show": ["record_id"], "records.create": ["record_id", "profile"],
+  "records.update": ["record_id", "profile", "expected_revision"],
   "whatsapp.status": [], "whatsapp.connect_session": [],
   "whatsapp.conversations.list": ["cursor", "limit"], "whatsapp.conversations.show": ["conversation_id"],
   "whatsapp.messages": ["conversation_id", "cursor", "limit"],

@@ -62,13 +62,14 @@ MANIFEST = "app.md"
 # Exact root descriptor names the host admits beside app.md (CAD-1415
 # draft: app-actions.json, app-assistant.json; CRM-3: app-chat.json, the
 # installed 0.1.0 chat contract kept for upgrade). Byte/shape checks only.
-ROOT_DESCRIPTORS = ("app-actions.json", "app-assistant.json", "app-chat.json")
+ROOT_DESCRIPTORS = ("app-actions.json", "app-assistant.json", "app-chat.json", "app-storage.json")
 DESCRIPTOR_CONTRACTS = {
     "app-actions.json": "app-actions/v1",
     "app-assistant.json": "app-assistant/v1",
     "app-chat.json": "app-chat/v1",
+    "app-storage.json": "app-storage/v1",
 }
-TOP_DIRS = ("workflows", "rubrics", "templates", "views", "bindings", "screens")
+TOP_DIRS = ("workflows", "rubrics", "templates", "views", "bindings", "screens", "storage")
 MANIFEST_KEYS = ("app", "title", "version", "needs", "summary", "listing")
 GATED_KEYS = ("records", "actions", "ui", "settings", "actors")
 NEEDS_KEYS = ("connections", "capabilities", "views", "bindings", "requires")
@@ -634,6 +635,8 @@ def bundle_files(root: Path) -> list[str]:
                 raise PackageError(
                     f"app source entry '{rel}': bindings/ holds exactly {BINDINGS_FILE}"
                 )
+            if top == "storage":
+                _check_storage_member(name)
             files.append(rel)
 
     if len(files) > MAX_FILES:
@@ -654,11 +657,21 @@ def screen_leaf(name: str) -> bool:
     return name == "screens.json" or re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}\.(js|css|svg|json)", name) is not None
 
 
+def _check_storage_member(name: str) -> None:
+    if not name.endswith(".json"):
+        raise PackageError(f"storage member {name!r} must end in .json")
+    _check_tag(name[:-len(".json")], "storage migration")
+
+
 def file_cap(rel: str) -> int:
     if rel.startswith("screens/waba/") and rel.count("/") == 2:
         if rel == "screens/waba/screens.json":
             return 16384
         return 393216 if rel.endswith(".js") else 131072
+    if rel == "app-storage.json":
+        return 32768
+    if rel.startswith("storage/"):
+        return 65536
     return MAX_FILE_BYTES
 
 
@@ -760,6 +773,9 @@ def check_pairing(manifest: Manifest, files: list[str], where: str) -> None:
             f"{where}: bindings/{BINDINGS_FILE} is present but app.md never declares "
             "`needs.bindings.contract`"
         )
+    storage_required = ("app-storage", (1,)) in manifest.requires
+    if ("app-storage.json" in present) != storage_required or any(p.startswith("storage/") for p in present) != storage_required:
+        raise PackageError(f"{where}: app-storage/1 requires app-storage.json and storage migrations together")
 
 
 def _check_descriptor_json(rel: str, text: str, where: str) -> None:
@@ -1233,6 +1249,8 @@ def _check_member_tree(rels: list[str], archive_name: str) -> None:
             raise PackageError(f"{archive_name}: views/ holds exactly {VIEWS_FILE}")
         if top == "bindings" and name != BINDINGS_FILE:
             raise PackageError(f"{archive_name}: bindings/ holds exactly {BINDINGS_FILE}")
+        if top == "storage":
+            _check_storage_member(name)
         files.append(rel)
     if not manifest:
         raise PackageError(f"{archive_name}: bundle root has no {MANIFEST}")

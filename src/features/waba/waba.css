@@ -42,15 +42,16 @@
 .waba-row:disabled { cursor: default; }
 .waba-avatar { display: inline-grid; flex: none; place-items: center; width: 2.125rem; aspect-ratio: 1; border-radius: 50%; background: color-mix(in srgb, var(--color-accent) 12%, transparent); color: var(--color-accent); font-size: var(--text-label); font-weight: 600; }
 .waba-row .waba-avatar { grid-row: span 2; }
-.waba-row-name { font-weight: 600; }
+.waba-row-name { display: flex; align-items: baseline; gap: 0.25rem; font-weight: 600; }
+.waba-row-ref { flex: none; color: var(--color-ink-400); font-size: var(--text-micro); font-weight: 400; }
 .waba-row-time { justify-self: end; color: var(--color-ink-400); font-size: var(--text-micro); white-space: nowrap; }
-.waba-row-name, .waba-row-last { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.waba-row-title, .waba-row-last { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .waba-row-last { color: var(--color-ink-400); font-size: var(--text-secondary); }
 .waba-row-last:last-child { grid-column: 2 / -1; }
 .waba-badge { justify-self: end; min-width: 1rem; padding: 0 0.3125rem; border-radius: 999px; background: var(--color-accent); color: var(--color-on-accent); font-size: var(--text-micro); text-align: center; }
 .waba-back { display: none; }
 
-.waba-conversation { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; min-width: 0; }
+.waba-conversation { --waba-chat-inset: clamp(0.75rem, 2.75vw, 1.75rem); display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; min-width: 0; }
 .waba-thread-head { min-height: 3.75rem; display: flex; gap: 0.5rem; align-items: center; padding: 0.375rem 0.75rem; border-bottom: 1px solid var(--color-edge); }
 .waba-thread-head h2 { flex: 1; min-width: 0; margin: 0; font-size: var(--text-cardtitle); overflow-wrap: anywhere; }
 .waba-details-trigger { display: flex; align-items: center; gap: 0.625rem; max-inline-size: 100%; min-block-size: 2.625rem; padding: 0.25rem 0.5rem; border: 0; border-radius: 0.5rem; background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; }
@@ -59,23 +60,23 @@
 .waba-thread-identity small { display: block; font-weight: 400; }
 .waba-conversation-body { display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); min-height: 0; }
 .waba-conversation[data-details="true"] .waba-conversation-body { grid-template-columns: minmax(0, 1fr) minmax(12rem, 17rem); }
-.waba-thread-main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
-.waba-history { position: relative; flex: 1; display: grid; grid-template-rows: minmax(0, 1fr); min-height: 0; background: color-mix(in srgb, var(--color-ink-850) 36%, transparent); }
+.waba-thread-main { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: color-mix(in srgb, var(--color-ink-850) 36%, transparent); }
+.waba-history { position: relative; flex: 1; display: grid; grid-template-rows: minmax(0, 1fr); min-height: 0; }
 .waba-timeline { overflow-anchor: none; }
-.waba-timeline-inner { display: grid; gap: 0.75rem; max-width: 50rem; margin-inline: auto; padding: 1rem clamp(0.75rem, 2vw, 1.5rem); }
-.waba-jump { position: absolute; inset-inline-end: 0.75rem; bottom: 0.625rem; }
+.waba-timeline-inner { display: grid; gap: 0.75rem; max-width: 48rem; margin-inline: auto; padding: 1rem var(--waba-chat-inset) 0.5rem; }
+.waba-jump { position: absolute; inset-inline-end: var(--waba-chat-inset); bottom: 0.625rem; }
 .waba-messages { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
 .waba-date { justify-self: center; color: var(--color-ink-400); font-size: var(--text-label); margin-block: 0.375rem; padding: 0.125rem 0.5rem; border-radius: 0.375rem; background: var(--color-ink-850); }
-.waba-message { display: grid; gap: 0.25rem; max-width: min(32rem, 86%); padding: 0.5rem 0.75rem; min-width: 0; border: 1px solid var(--color-edge); background: var(--color-ink-850); border-radius: 0.625rem; justify-self: start; }
-.waba-message[data-direction="outbound"] { justify-self: end; background: color-mix(in srgb, var(--color-accent) 10%, var(--color-ink-850)); border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-edge)); }
+.waba-message { display: grid; gap: 0.25rem; max-width: min(32rem, 90%); padding: 0.5rem 0.75rem; min-width: 0; border: 1px solid color-mix(in srgb, var(--color-edge) 60%, transparent); background: var(--color-ink-850); border-radius: 0.875rem; border-end-start-radius: 0.25rem; justify-self: start; }
+.waba-message[data-direction="outbound"] { justify-self: end; border-end-start-radius: 0.875rem; border-end-end-radius: 0.25rem; background: color-mix(in srgb, var(--color-accent) 13%, var(--color-ink-850)); border-color: color-mix(in srgb, var(--color-accent) 25%, var(--color-edge)); }
 .waba-message p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .waba-message-meta { display: flex; gap: 0.375rem; justify-content: end; font-size: var(--text-micro); }
 .waba-photo-preview { display: block; inline-size: min(14rem, 100%); aspect-ratio: 4 / 3; object-fit: contain; border-radius: 0.25rem; }
 .waba-message:has(.waba-photo-preview) { inline-size: min(14rem, 86%); }
 .waba-message .waba-photo-preview { inline-size: 100%; }
-.waba-thread-footer { flex: none; display: grid; gap: 0.5rem; max-height: 55%; overflow: auto; min-width: 0; padding: 0.625rem 0.875rem; border-top: 1px solid var(--color-edge); }
+.waba-thread-footer { box-sizing: border-box; flex: none; display: grid; gap: 0.5rem; max-height: 55%; overflow: auto; min-width: 0; width: min(100%, 48rem); margin-inline: auto; padding: 0.5rem var(--waba-chat-inset) max(1rem, env(safe-area-inset-bottom)); }
 .waba-thread-footer > button { justify-self: start; }
-.waba-compose-box { display: grid; gap: 0.25rem; min-width: 0; border: 1px solid var(--color-edge); border-radius: 0.75rem; padding: 0.5rem 0.625rem; background: var(--color-ink-850); }
+.waba-compose-box { display: grid; gap: 0.25rem; min-width: 0; border: 1px solid color-mix(in srgb, var(--color-edge) 70%, transparent); border-radius: 1.125rem; padding: 0.5rem 0.625rem 0.375rem; background: var(--color-ink-850); box-shadow: 0 3px 12px rgb(0 0 0 / 16%); }
 .waba-compose-box:focus-within { border-color: var(--color-accent); }
 .waba-compose-box textarea { display: block; box-sizing: border-box; width: 100%; min-height: 2.25rem; max-height: 8.25rem; field-sizing: content; padding: 0.25rem 0; outline: none; border: 0; background: transparent; color: inherit; resize: none; overflow: auto; }
 .waba-compose-foot { display: flex; align-items: center; gap: 0.5rem; justify-content: space-between; }
@@ -84,12 +85,12 @@
 .waba-compose-send:not(:disabled):hover { filter: brightness(1.12); }
 .waba-compose-send:disabled { background: var(--color-ink-700); color: var(--color-ink-400); cursor: default; }
 .waba-compose-send:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
-.waba-contact-details { border-inline-start: 1px solid var(--color-edge); padding: 0.75rem; }
+.waba-contact-details { border-inline-start: 1px solid var(--color-edge); padding: 0.875rem; }
 .waba-contact-details[hidden] { display: none; }
 .waba-contact-details > * + * { margin-top: 0.75rem; }
 .waba-contact-details h3 { flex: 1; font-size: var(--text-cardtitle); }
 .waba-contact-details h4 { margin-bottom: 0.375rem; }
-.waba-contact-profile { display: flex; align-items: center; gap: 0.625rem; overflow-wrap: anywhere; }
+.waba-contact-profile { display: flex; align-items: center; gap: 0.625rem; overflow-wrap: anywhere; padding: 0.75rem; border-radius: 0.75rem; background: var(--color-ink-850); }
 .waba-contact-facts { display: grid; gap: 0.5rem; overflow-wrap: anywhere; }
 .waba-contact-facts dt { color: var(--color-ink-400); font-size: var(--text-label); }
 .waba-contact-media { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.375rem; padding: 0; margin: 0; list-style: none; }

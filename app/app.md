@@ -1,12 +1,12 @@
 ---
 app: waba
 title: WhatsApp Business
-version: '0.3.2'
+version: '0.3.3'
 summary: Use the official WhatsApp Business connection or a test-only linked device for the inbox and owner-approved replies. The app holds no credentials.
 needs:
   connections: []
   requires:
-    contracts: {app-screens: [1], screen-records: [1], screen-startup: [1]}
+    contracts: {app-screens: [1], screen-records: [1], screen-startup: [1], app-storage: [1]}
 listing:
   tagline: Answer WhatsApp Business chats with AI drafts you approve
   category: customers
@@ -22,7 +22,7 @@ listing:
     - Send a broadcast you approve, now or scheduled
   data:
     stores:
-      - Assistant reply drafts and the AI agent mode you choose
+      - Assistant reply drafts, the selected inbox provider and the AI reply mode
       - Official data stays in FavCRM; linked-device message contents and identifiers are encrypted
       - Linked-device activity timestamps are indexed locally in plaintext
     personal: true
@@ -44,13 +44,14 @@ change the official connection.
 
 ## Set up once
 
-From a trusted Cadence source checkout, install this directory, then
-approve the exact bundle digest it returns:
+On a hosted board, install or update this package and approve the version
+as a workspace owner. In **Settings**, choose and save the provider once
+before using the Inbox. The choice and AI reply mode are stored as one
+installation-scoped settings record. No provider credential is stored there.
 
-```sh
-cadence app catalog install <path-to>/app
-cadence app catalog approve INSTALL_ID --digest BUNDLE_DIGEST
-```
+This version requires hosted `app-storage/v1`. After the host applies the
+settings migration, use a compatible forward build for rollback; older
+packages that do not declare this storage cannot replace it.
 
 ## Screens
 
@@ -81,9 +82,9 @@ cadence app catalog approve INSTALL_ID --digest BUNDLE_DIGEST
   again. "Accepted" or "scheduled" is never a delivery. Meta charges the
   WhatsApp Business Account per delivered marketing message.
 
-- **AI agent.** Choose copilot or human-only for this install (a
-  session-only choice where the browser refuses storage). In copilot
-  mode the Inbox offers "Draft with assistant": the operator confirms
+- **AI agent.** An owner can save copilot or human-only reply mode for
+  the installation. In copilot mode the Inbox offers "Draft with assistant":
+  the operator confirms
   the guidance in the host card, the Assistant reads this one
   conversation (last 20 text messages, phone masked) and parks a draft.
   The draft shows as "Assistant draft" with Insert (fills the composer,

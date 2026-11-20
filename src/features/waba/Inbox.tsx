@@ -14,8 +14,22 @@ export interface Handoff { set: boolean; release: boolean }
 const DRAFT_POLL_MS = 5000;
 type Load<T> = { state: "loading" } | { state: "ok"; value: T } | { state: "failed"; text: string };
 
-function contactName(row: ConversationRow, scope: DisplayScope) {
-  return row.contact.name ?? row.contact.phone ?? (scope.provider === "linked" ? row.conversationId : "Unknown contact");
+function contactPhone(row: ConversationRow, linked: boolean) {
+  if (linked && row.conversationId.endsWith("@g.us")) return null;
+  if (row.contact.phone) return row.contact.phone;
+  // An opaque @lid identifier is not a phone number.
+  const address = linked ? /^([1-9]\d{7,14})@s\.whatsapp\.net$/.exec(row.conversationId) : null;
+  return address ? `+${address[1]}` : null;
+}
+
+function contactName(row: ConversationRow, phone: string | null, linked: boolean, zh: boolean) {
+  if (row.contact.name) return row.contact.name;
+  if (linked && row.conversationId.endsWith("@g.us")) return zh ? "WhatsApp 群組" : "WhatsApp group";
+  return phone ?? (linked ? (zh ? "WhatsApp 聯絡人" : "WhatsApp contact") : (zh ? "未知聯絡人" : "Unknown contact"));
+}
+
+function contactReference(row: ConversationRow) {
+  return /^(\d+)@lid$/.exec(row.conversationId)?.[1].slice(-4) ?? null;
 }
 
 function Avatar({ name }: { name: string }) {
@@ -127,11 +141,13 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
         </ErrorNotice>
         : !shown.length ? <EmptyState title={needle ? "No matching conversations" : "No conversations yet"} name="conversations">{needle ? "Search covers loaded conversations. Load more or clear the search." : "New WhatsApp conversations appear here."}</EmptyState>
         : <ul className="waba-rows">{shown.map(r => {
-          const name = contactName(r, scope), at = stamp(r.lastMessage?.createdAt ?? null);
+          const phone = contactPhone(r, linked);
+          const name = contactName(r, phone, linked, zh), at = stamp(r.lastMessage?.createdAt ?? null);
+          const reference = linked && !r.contact.name && !phone ? contactReference(r) : null;
           return <li key={r.conversationId}>
             <button type="button" className="waba-row" disabled={replyDirty} aria-current={r.conversationId === selected ? "true" : undefined} onClick={e => { openRow.current = e.currentTarget; select(r.conversationId); }}>
               <Avatar name={name} />
-              <span className="waba-row-name">{name}</span>
+              <span className="waba-row-name"><span className="waba-row-title">{name}</span>{reference && <span className="waba-row-ref" aria-label={zh ? `聯絡人編號末四位 ${reference}` : `Contact reference ending ${reference}`}>· {reference}</span>}</span>
               {at === null ? <span /> : <time className="waba-row-time" dateTime={r.lastMessage?.createdAt ?? undefined}>{dayFormat[locale].format(at) === today ? timeFormat[locale].format(at) : dayFormat[locale].format(at)}</time>}
               <span className="waba-row-last">{r.lastMessage?.direction === "outbound" ? "You: " : ""}{r.lastMessage?.body ?? ""}</span>
               {r.unreadCount ? <span className="waba-badge" aria-label={`${r.unreadCount} unread`}>{r.unreadCount}</span> : null}
@@ -271,9 +287,13 @@ function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient
   const ordered = useMemo(() => messages.state === "ok"
     ? [...messages.value.rows].sort((a, b) => (stamp(a.createdAt) ?? 0) - (stamp(b.createdAt) ?? 0))
     : [], [messages]);
-  const title = c ? contactName(c, scope) : "Conversation";
-  const group = id.endsWith("@g.us");
-  const subtitle = group ? (zh ? "WhatsApp 群組" : "WhatsApp group") : c?.contact.phone;
+  const linked = scope.provider === "linked";
+  const phone = c ? contactPhone(c, linked) : null;
+  const title = c ? contactName(c, phone, linked, zh) : (zh ? "對話" : "Conversation");
+  const group = linked && id.endsWith("@g.us");
+  const reference = linked && c && !phone ? contactReference(c) : null;
+  const subtitle = group ? (zh ? "WhatsApp 群組" : "WhatsApp group")
+    : phone ?? (reference ? (zh ? `聯絡人編號末四位 ${reference}` : `Contact ref. ending ${reference}`) : null);
   const photos = details ? ordered.filter(m => m.previewJpeg !== null) : [];
   const locale = zh ? "zh" : "en";
   const day = dayFormat[locale], time = timeFormat[locale];
@@ -349,11 +369,13 @@ function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient
       {c && <aside id="waba-contact-details" className="waba-contact-details" aria-labelledby="waba-contact-title" hidden={!details}>
         <header className="waba-head"><h3 id="waba-contact-title">{group ? (zh ? "群組詳情" : "Group details") : (zh ? "聯絡人詳情" : "Contact details")}</h3><button className="btn" type="button" ref={closeDetailsButton} onClick={closeDetails}>{zh ? "關閉" : "Close"}</button></header>
         <div className="waba-contact-profile"><Avatar name={title} /><strong>{title}</strong></div>
-        {(subtitle || c.status || c.lastInboundAt) && <dl className="waba-contact-facts">
-          {subtitle && <div><dt>{group ? (zh ? "類型" : "Type") : (zh ? "電話" : "Phone")}</dt><dd>{subtitle}</dd></div>}
+        <dl className="waba-contact-facts">
+          {group ? <div><dt>{zh ? "類型" : "Type"}</dt><dd>{subtitle}</dd></div> : <div><dt>{zh ? "電話" : "Phone"}</dt>
+            <dd>{phone ? <bdi>{phone}</bdi> : <span className="waba-muted">{zh ? "WhatsApp 未提供電話號碼" : "Not shared by WhatsApp"}</span>}</dd></div>}
+          {reference && <div><dt>{zh ? "聯絡人編號末四位" : "Contact reference ending"}</dt><dd>{reference}</dd></div>}
           {c.status && <div><dt>{zh ? "狀態" : "Status"}</dt><dd>{c.status}</dd></div>}
           {c.lastInboundAt && <div><dt>{zh ? "最後收到訊息" : "Last inbound"}</dt><dd>{when(c.lastInboundAt)}</dd></div>}
-        </dl>}
+        </dl>
         <section aria-label={zh ? "已分享的媒體" : "Shared media"}>
           <h4>{zh ? "已分享的媒體" : "Shared media"}</h4>
           {photos.length ? <ul className="waba-contact-media">{photos.map(m => <li key={m.id}><PhotoPreview jpeg={m.previewJpeg!} label={zh ? "相片預覽" : "Photo preview"} unavailable={unavailablePreview} /></li>)}</ul>

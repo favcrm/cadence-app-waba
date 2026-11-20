@@ -1,0 +1,15 @@
+{
+  "contract": "app-storage/v1",
+  "app": "waba",
+  "record_kind": "inbox_settings",
+  "schema_version": 1,
+  "compatible_schema_versions": [1],
+  "default_table": "inbox_settings",
+  "migrations": [
+    {
+      "version": 1,
+      "path": "storage/001-settings.json",
+      "sha256": "sha256:7cbf5b03c072fe4f011656e92b6031b46e1e95f8c3b4483c9e44429b8d6ef341"
+    }
+  ]
+}

@@ -16,18 +16,18 @@
     {
       "name": "client.js",
       "media_type": "text/javascript",
-      "size": 100843,
-      "sha256": "sha256:d68cbc813bb825c8ce9a8de7d1e069d8254de5806e795c7956fac3d1f9674e70"
+      "size": 105069,
+      "sha256": "sha256:7ebfbfbc09dc23e9be25d67a083e09d0cf86cbb38d33c830c314423a359a9044"
     },
     {
       "name": "waba.css",
       "media_type": "text/css",
-      "size": 33409,
-      "sha256": "sha256:c7b7562c062e6635ef5d0226729207d52fb7cfdb4a132a77c5b9ae4b289b42e1"
+      "size": 33972,
+      "sha256": "sha256:944f65b7e7bbc919d597d874ef5bc85c5f69c27281fab10dc640718de628304d"
     }
   ],
   "provenance": {
-    "source_digest": "sha256:e5562e094fdae13b6dd3a5e70d654ab18c26d40324f035d20e91ccb1e64f43a6",
+    "source_digest": "sha256:524b268ee373f0a1e9e6556cd13e0ac2f672c1cce5a87a4fc3a932062e3f3867",
     "sdk_digest": "sha256:fd65c974511e63b3996e9fa7e438fb4e39df5f508d11636116ef150fcc123e35",
     "toolchain_digest": "sha256:e21cfc8222db408abe6ba5a482520639d9cf4b96481c19aff4b4246af8a65e42"
   },
@@ -38,6 +38,9 @@
   ],
   "tools": {},
   "operations": [
+    "records.show",
+    "records.create",
+    "records.update",
     "whatsapp.status",
     "whatsapp.connect_session",
     "whatsapp.conversations.list",
