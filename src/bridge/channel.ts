@@ -1,5 +1,5 @@
 import { ApiError } from "@cadence/screen-ui";
-import { acceptPush,clearScope } from "./scope";
+import { acceptComposeState,acceptPush,clearScope } from "./scope";
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: unknown) => void; timer: ReturnType<typeof setTimeout> | undefined; kind: "call" | "slot" };
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
@@ -18,6 +18,11 @@ class Channel {
   private port: MessagePort | null = null;
   private retired = false;
   private serial = 0;
+  private composeSupported = false;
+  get hostCompose(): boolean { return this.composeSupported; }
+  nominateConversation(conversationId: string | null): void {
+    if (this.composeSupported && this.port && !this.retired) this.port.postMessage({ v: 2, op: "whatsapp-compose", conversation_id: conversationId });
+  }
   private pending = new Map<string, Pending>();
   start(): void {
     if (this.port || this.retired) return;
@@ -35,7 +40,8 @@ class Channel {
     pair.port1.onmessageerror = () => this.retire(invalid());
     pair.port1.start();
     window.parent.postMessage({ v: 1, op: "init", tag: boot.tag, bridge_nonce: boot.bridge_nonce, generation: boot.generation }, boot.parent_origin, [pair.port2]);
-    pair.port1.postMessage({ v: 1, op: "ready", accepts: ["screen.v2", "screen-records.v1", "screen-locale.v1"] });
+    this.composeSupported = window.location.hash === "#cadence-whatsapp-compose-v1";
+    pair.port1.postMessage({ v: 1, op: "ready", accepts: ["screen.v2", "screen-records.v1", "screen-locale.v1", ...(this.composeSupported ? ["screen-whatsapp-compose.v1"] : [])] });
     window.addEventListener("pagehide", () => this.retire(new ApiError("WhatsApp mount retired", 403)), { once: true });
   }
   request(kind: "call" | "slot", verb: string, args: Record<string, unknown>): Promise<unknown> {
@@ -56,6 +62,11 @@ class Channel {
     if (data.op === "screen") {
       if (bytes(data) > 131072) throw invalid();
       acceptPush(data);
+      return;
+    }
+    if (data.op === "whatsapp-compose-state") {
+      if (!this.composeSupported || !exact(data, ["v", "op", "dirty", "refresh"]) || typeof data.dirty !== "boolean" || typeof data.refresh !== "boolean") throw invalid();
+      acceptComposeState(data.dirty, data.refresh);
       return;
     }
     if (data.op !== "reply" && data.op !== "slot-state") throw invalid();

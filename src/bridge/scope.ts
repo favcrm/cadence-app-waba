@@ -12,6 +12,13 @@ const notify = () => listeners.forEach(f => f());
 export const subscribeScope = (f: () => void) => { listeners.add(f); return () => { listeners.delete(f); }; };
 export const getScope = () => snapshot;
 export function useScope() { return useSyncExternalStore(subscribeScope, getScope); }
+let hostDirty = false;
+export function useHostDirty() { return useSyncExternalStore(subscribeScope, () => hostDirty); }
+export function acceptComposeState(dirty: boolean, refresh: boolean): void {
+  hostDirty = dirty;
+  if (refresh) pushes++;
+  notify();
+}
 // Counts accepted host pushes. A page re-reads in the background on each one.
 let pushes = 0;
 const getPushes = () => pushes;
@@ -39,7 +46,7 @@ export function useOnPush(refresh: () => Promise<unknown>): void {
   }, [count]);
 }
 export function scopeError() { return error; }
-export function clearScope(reason: string): void { snapshot = null; error = reason; notify(); }
+export function clearScope(reason: string): void { snapshot = null; hostDirty = false; error = reason; notify(); }
 /** Set when the host never pushed a screen in time; a late push still wins. */
 export function markUnreachable(): void { if (!snapshot) { error = "The WhatsApp host is unreachable. Reopen this screen from FavCRM."; notify(); } }
 const obj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);

@@ -1,7 +1,7 @@
 import { ApiError,Button,EmptyState,ErrorNotice,Loading,Notice } from "@cadence/screen-ui";
 import { useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState } from "react";
 import { patchRoute } from "../../bridge/route";
-import { markUnreachable,routable,scopeError,useScope } from "../../bridge/scope";
+import { markUnreachable,routable,scopeError,useHostDirty,useScope } from "../../bridge/scope";
 import Broadcasts from "./Broadcasts";
 import AiAgent from "./AiAgent";
 import Connection from "./Connection";
@@ -50,7 +50,9 @@ export default function WabaScreen() {
   const saveInProgress = useRef(false);
   const [pick, setPick] = useState<Provider | null>(null);
   const provider = saved?.profile.provider;
-  const [replyDirty, setReplyDirty] = useState(false);
+  const [frameDirty, setReplyDirty] = useState(false);
+  const hostDirty = useHostDirty();
+  const replyDirty = frameDirty || hostDirty;
   // The host re-pushes the scope every few seconds as a new object; pages key
   // their reads on this stable one, so a push never resets loaded data or forms.
   const installId = snapshot?.scope.installId, digest = snapshot?.digest;

@@ -1,5 +1,6 @@
 import { ApiError,Button,EmptyState,ErrorNotice,Field,Loading,Notice } from "@cadence/screen-ui";
 import { Fragment,useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState,type ReactNode } from "react";
+import { channel } from "../../bridge/channel";
 import { patchRoute } from "../../bridge/route";
 import { routable,useOnPush,useScope,type DisplayScope } from "../../bridge/scope";
 import { serviceCall,serviceSlot } from "../../bridge/services";
@@ -441,6 +442,14 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const ordered = useMemo(() => messages.state === "ok"
     ? [...messages.value.rows].sort((a, b) => (stamp(a.createdAt) ?? 0) - (stamp(b.createdAt) ?? 0))
     : [], [messages]);
+  const composeId = scope.provider === "linked" && canReply && channel.hostCompose && conversation.state === "ok"
+    && /^[A-Za-z0-9._:-]{1,128}@(s\.whatsapp\.net|lid|g\.us)$/.test(conversation.value.conversationId)
+    ? conversation.value.conversationId : null;
+  useEffect(() => {
+    if (composeId === null) return;
+    channel.nominateConversation(composeId);
+    return () => channel.nominateConversation(null);
+  }, [composeId]);
   const linked = scope.provider === "linked";
   const phone = c ? contactPhone(c, linked) : null;
   const workLink = inboxScope && c?.work && validWorkRef(c.work.ref, inboxScope) ? c.work : null;
@@ -518,7 +527,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
           <TakeoverBar scope={scope} id={id} handoffAt={c.handoffAt} rights={handoff} onChanged={() => { void show(); }} />
           {assist.brief && <Brief scope={scope} id={id} canOpen={assist.open} />}
           {draft && <DraftChip draft={draft} canInsert={canReply && windowOpen(c)} canDiscard={assist.discard} note={assistNote} onInsert={() => setInserted(i => ({ text: draft.text, n: (i?.n ?? 0) + 1 }))} onDiscard={() => { void discard(); }} />}
-          {canReply ? <Composer scope={scope} conversationId={c.conversationId} handoffAt={c.handoffAt} freeformUntil={c.freeformUntil} open={scope.provider === "linked" || windowOpen(c)} autoTakeover={handoff.set} inserted={inserted} onSent={onSent} onChanged={reload} onDirtyChange={onReplyDirty} />
+          {canReply ? !(linked && channel.hostCompose) && <Composer scope={scope} conversationId={c.conversationId} handoffAt={c.handoffAt} freeformUntil={c.freeformUntil} open={scope.provider === "linked" || windowOpen(c)} autoTakeover={handoff.set} inserted={inserted} onSent={onSent} onChanged={reload} onDirtyChange={onReplyDirty} />
             : <Notice state="read-only">You can read this inbox. Only the workspace operator can reply.</Notice>}
           {canTemplate && <Button size="sm" disabled={replyDirty} onClick={() => onRecipient(c)}>{zh ? "使用已核准的範本…" : "Send an approved template…"}</Button>}
         </footer>}

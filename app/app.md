@@ -1,7 +1,7 @@
 ---
 app: waba
 title: WhatsApp Business
-version: '0.3.6'
+version: '0.3.7'
 summary: Use the official WhatsApp Business connection or a test-only linked device for the inbox and owner-approved replies. The app holds no credentials.
 needs:
   connections: []
@@ -75,6 +75,10 @@ Those tools are not shown for linked devices. Old tool URLs open the Inbox.
   WhatsApp server ACK is recorded; acceptance does not confirm delivery.
   Never retry an uncertain send automatically.
   Replies are text only; inbound photo previews do not support uploads.
+  On a compatible host, an owner replying in an existing linked-device thread
+  types in the board composer and presses Send or Enter once; Shift+Enter adds
+  a line. The board confirms the exact recipient and edited text before sending.
+  Older hosts, Official API and new-number messages retain their approval flow.
 - **Contact details (linked device on supported hosts).** Full phone numbers
   appear beside saved names in the list and under the chat title when the
   paired account knows them. A group or an opaque ID is not a phone number.
