@@ -1,7 +1,7 @@
 ---
 app: waba
 title: WhatsApp Business
-version: '0.3.7'
+version: '0.3.8'
 summary: Use the official WhatsApp Business connection or a test-only linked device for the inbox and owner-approved replies. The app holds no credentials.
 needs:
   connections: []

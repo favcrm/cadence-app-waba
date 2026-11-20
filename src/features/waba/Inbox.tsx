@@ -1,5 +1,5 @@
 import { ApiError,Button,EmptyState,ErrorNotice,Field,Loading,Notice } from "@cadence/screen-ui";
-import { Fragment,useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState,type ReactNode } from "react";
+import { Fragment,useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState,useSyncExternalStore,type ReactNode } from "react";
 import { channel } from "../../bridge/channel";
 import { patchRoute } from "../../bridge/route";
 import { routable,useOnPush,useScope,type DisplayScope } from "../../bridge/scope";
@@ -442,9 +442,9 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const ordered = useMemo(() => messages.state === "ok"
     ? [...messages.value.rows].sort((a, b) => (stamp(a.createdAt) ?? 0) - (stamp(b.createdAt) ?? 0))
     : [], [messages]);
-  const composeId = scope.provider === "linked" && canReply && channel.hostCompose && conversation.state === "ok"
-    && /^[A-Za-z0-9._:-]{1,128}@(s\.whatsapp\.net|lid|g\.us)$/.test(conversation.value.conversationId)
-    ? conversation.value.conversationId : null;
+  const composeId = scope.provider === "linked" && canReply && channel.hostCompose
+    && /^[A-Za-z0-9._:-]{1,128}@(s\.whatsapp\.net|lid|g\.us)$/.test(id) ? id : null;
+  const replyAvailability = useSyncExternalStore(channel.subscribeReplyAvailability, () => channel.availabilityFor(composeId));
   useEffect(() => {
     if (composeId === null) return;
     channel.nominateConversation(composeId);
@@ -483,6 +483,12 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
     </header>
     <div className="waba-conversation-body">
       <div className="waba-thread-main">
+        {replyAvailability && <div className="waba-reply-availability" role="status">
+          {replyAvailability !== "verified" && <Notice state={replyAvailability}>
+            {replyAvailability === "checking" ? (zh ? "正在核對收件人…" : "Verifying recipient…")
+              : (zh ? "此對話暫時無法回覆，你仍可查看訊息。" : "Replies are unavailable for this chat. You can still read messages.")}
+          </Notice>}
+        </div>}
         <div className="waba-history">
           <div className="waba-timeline" tabIndex={0} role="region" aria-label={zh ? "訊息記錄" : "Message history"} ref={timeline} onKeyDown={e => {
             // Native Home/End scroll animations can continue after Jump to latest.
