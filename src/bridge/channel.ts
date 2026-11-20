@@ -14,14 +14,36 @@ function refusal(v: unknown): ApiError {
   const status = ({ not_found: 404, missing: 404, stale_revision: 409, conflict: 409, unauthorized: 401, forbidden: 403, unavailable: 503 } as Record<string, number>)[v.code] ?? 400;
   return new ApiError(v.text, status, { code: v.code });
 }
+type ReplyAvailability = "checking" | "blocked" | "verified";
 class Channel {
   private port: MessagePort | null = null;
   private retired = false;
   private serial = 0;
   private composeSupported = false;
+  private replyAvailabilitySupported = false;
+  private nomination = 0;
+  private conversationId: string | null = null;
+  private replyAvailability: ReplyAvailability = "checking";
+  private replyListeners = new Set<() => void>();
+  subscribeReplyAvailability = (listener: () => void): (() => void) => {
+    this.replyListeners.add(listener);
+    return () => { this.replyListeners.delete(listener); };
+  };
+  availabilityFor(id: string | null): ReplyAvailability | null {
+    if (!this.replyAvailabilitySupported || this.retired || id === null) return null;
+    return id === this.conversationId ? this.replyAvailability : "checking";
+  }
+  private announceReplyAvailability(): void {
+    this.replyListeners.forEach(listener => listener());
+  }
   get hostCompose(): boolean { return this.composeSupported; }
   nominateConversation(conversationId: string | null): void {
-    if (this.composeSupported && this.port && !this.retired) this.port.postMessage({ v: 2, op: "whatsapp-compose", conversation_id: conversationId });
+    if (!this.composeSupported || !this.port || this.retired || this.conversationId === conversationId) return;
+    this.conversationId = conversationId;
+    this.nomination++;
+    this.replyAvailability = "checking";
+    this.port.postMessage({ v: 2, op: "whatsapp-compose", conversation_id: conversationId });
+    this.announceReplyAvailability();
   }
   private pending = new Map<string, Pending>();
   start(): void {
@@ -41,7 +63,10 @@ class Channel {
     pair.port1.start();
     window.parent.postMessage({ v: 1, op: "init", tag: boot.tag, bridge_nonce: boot.bridge_nonce, generation: boot.generation }, boot.parent_origin, [pair.port2]);
     this.composeSupported = window.location.hash === "#cadence-whatsapp-compose-v1";
-    pair.port1.postMessage({ v: 1, op: "ready", accepts: ["screen.v2", "screen-records.v1", "screen-locale.v1", ...(this.composeSupported ? ["screen-whatsapp-compose.v1"] : [])] });
+    this.replyAvailabilitySupported = this.composeSupported && new URLSearchParams(window.location.search).get("wa_compose_availability") === "1";
+    pair.port1.postMessage({ v: 1, op: "ready", accepts: ["screen.v2", "screen-records.v1", "screen-locale.v1",
+      ...(this.composeSupported ? ["screen-whatsapp-compose.v1"] : []),
+      ...(this.replyAvailabilitySupported ? ["screen-whatsapp-reply-availability.v1"] : [])] });
     window.addEventListener("pagehide", () => this.retire(new ApiError("WhatsApp mount retired", 403)), { once: true });
   }
   request(kind: "call" | "slot", verb: string, args: Record<string, unknown>): Promise<unknown> {
@@ -67,6 +92,16 @@ class Channel {
     if (data.op === "whatsapp-compose-state") {
       if (!this.composeSupported || !exact(data, ["v", "op", "dirty", "refresh"]) || typeof data.dirty !== "boolean" || typeof data.refresh !== "boolean") throw invalid();
       acceptComposeState(data.dirty, data.refresh);
+      return;
+    }
+    if (data.op === "whatsapp-reply-availability") {
+      if (!this.replyAvailabilitySupported || !exact(data, ["v", "op", "nomination", "state"]) ||
+          typeof data.nomination !== "number" || !Number.isSafeInteger(data.nomination) || data.nomination < 1 ||
+          (data.state !== "checking" && data.state !== "blocked" && data.state !== "verified")) throw invalid();
+      if (this.conversationId !== null && data.nomination === this.nomination && data.state !== this.replyAvailability) {
+        this.replyAvailability = data.state;
+        this.announceReplyAvailability();
+      }
       return;
     }
     if (data.op !== "reply" && data.op !== "slot-state") throw invalid();
@@ -105,6 +140,7 @@ class Channel {
     this.port?.close(); this.port = null;
     for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(error); }
     this.pending.clear(); clearScope(error.message);
+    this.announceReplyAvailability();
   }
 }
 export const channel = new Channel();
