@@ -1,6 +1,6 @@
 import { Button,Detail,ErrorNotice,Loading,Notice } from "@cadence/screen-ui";
 import { useCallback,useEffect,useState } from "react";
-import { useOnPush,type DisplayScope } from "../../bridge/scope";
+import { useOnPush,useScope,type DisplayScope } from "../../bridge/scope";
 import { serviceCall } from "../../bridge/services";
 import { errorText,parseConnect,parseStatus,when,type ConnectSession,type Status } from "./door";
 
@@ -13,6 +13,7 @@ const expired = (link: ConnectSession) => !!link.expiresAt && Date.parse(link.ex
 
 export default function Connection({ scope, canConnect }: { scope: DisplayScope; canConnect: boolean }) {
   const linked = scope.provider === "linked";
+  const zh = useScope()?.presentationLocale === "zh-TW";
   const [read, setRead] = useState<Read>({ state: "unknown" });
   // The link lives in memory only; it is never stored or logged.
   const [signup, setSignup] = useState<Signup>({ phase: "idle" });
@@ -57,18 +58,19 @@ export default function Connection({ scope, canConnect }: { scope: DisplayScope;
   const status = read.state === "ok" ? read.status : null;
   return <section className="waba-page" aria-labelledby="waba-connection-title">
     <header className="waba-head">
-      <h1 id="waba-connection-title">Settings</h1>
-      <Button size="sm" onClick={() => { void refresh(signup.phase === "open" || signup.phase === "manual" || signup.phase === "incomplete"); }} loading={read.state === "reading"}>Check status</Button>
+      <h2 id="waba-connection-title">{zh ? "連線狀態" : "Connection status"}</h2>
+      <Button size="sm" onClick={() => { void refresh(signup.phase === "open" || signup.phase === "manual" || signup.phase === "incomplete"); }} loading={read.state === "reading"}>{zh ? "檢查狀態" : "Check status"}</Button>
     </header>
-    {read.state === "unknown" || read.state === "reading" ? <Loading>{linked ? "Reading the linked-device connection…" : "Reading the WhatsApp connection from FavCRM…"}</Loading>
+    {read.state === "unknown" || read.state === "reading" ? <Loading>{zh ? "正在檢查連線…" : "Checking the connection…"}</Loading>
       : read.state === "failed" ? <ErrorNotice onRetry={() => { void refresh(); }}>
-          Status unknown: the lookup failed, so this is not a disconnected state. {read.text}
+          {zh ? "無法確認連線狀態。" : "Couldn’t verify the connection."} {read.text}
         </ErrorNotice>
-      : <StatusCard status={read.status} linked={linked} />}
+      : <StatusCard status={read.status} linked={linked} zh={zh} />}
     {status && !status.connected && !canConnect && <Notice state="read-only">Only the workspace operator can connect a WhatsApp number.</Notice>}
     {canConnect && status && (linked || !status.connected) && <div className="waba-card" data-signup={signup.phase}>
-      <h2>{linked ? "Manage linked device" : "Connect a number"}</h2>
-      <p>{linked ? "Open workspace account settings, then use WhatsApp's Linked devices screen to scan the QR code shown there." : "Signup runs on FavCRM's hosted page with your own Meta login. Cadence never sees a Meta or FavCRM credential."}</p>
+      <h3>{linked ? (zh ? "管理已連結裝置" : "Manage linked device") : (zh ? "連接電話號碼" : "Connect a number")}</h3>
+      <p>{linked ? (zh ? "開啟工作區帳戶設定，再以 WhatsApp 掃描二維碼。" : "Open workspace account settings to pair with a WhatsApp QR code.")
+        : (zh ? "請在 FavCRM 使用你的 Meta 帳戶完成設定。" : "Finish setup in FavCRM with your Meta account.")}</p>
       {signup.phase === "open" && <Notice>{linked ? "Account settings opened in a new tab. After pairing, choose Check status." : <>The signup page opened in a new tab. When you finish or close it, choose <strong>Check status</strong>.</>}</Notice>}
       {signup.phase === "manual" && <ManualLink link={signup.link} linked={linked} />}
       {signup.phase === "expired" && <ErrorNotice>The signup link expired before signup finished. Get a new link to try again.</ErrorNotice>}
@@ -76,7 +78,7 @@ export default function Connection({ scope, canConnect }: { scope: DisplayScope;
       {signup.phase === "incomplete" && signup.link && <ManualLink link={signup.link} linked={linked} />}
       {signup.phase === "failed" && <ErrorNotice>{linked ? "Account settings could not open" : "Signup could not start"}: {signup.text}</ErrorNotice>}
       <Button variant="primary" onClick={() => { void connect(); }} loading={signup.phase === "minting"}>
-        {linked ? "Open account settings" : signup.phase === "idle" || signup.phase === "minting" ? "Connect WhatsApp" : "Get a new signup link"}
+        {linked ? (zh ? "開啟帳戶設定" : "Open account settings") : signup.phase === "idle" || signup.phase === "minting" ? (zh ? "連接 WhatsApp" : "Connect WhatsApp") : (zh ? "取得新連結" : "Get a new signup link")}
       </Button>
     </div>}
   </section>;
@@ -91,15 +93,13 @@ function ManualLink({ link, linked }: { link: ConnectSession; linked: boolean })
   </div>;
 }
 
-function StatusCard({ status, linked }: { status: Status; linked: boolean }) {
-  if (linked) return <div className="waba-card" data-connected={String(status.connected)}>
-    <h2>{status.connected ? "Connected" : "Not connected"}</h2>
-    <p>{status.connected ? "This workspace's linked device is connected." : "No linked-device session is connected for this workspace."}</p>
-  </div>;
+function StatusCard({ status, linked, zh }: { status: Status; linked: boolean; zh: boolean }) {
+  const title = status.connected ? (zh ? "已連線" : "Connected") : (zh ? "未連線" : "Not connected");
+  if (linked) return <p className="waba-linked-status" data-connected={String(status.connected)}><strong>{title}</strong></p>;
   const hook = status.webhook;
   const health = !hook ? "Unknown" : hook.subscribed === true ? (hook.error ? "Subscribed, with errors" : "Healthy") : hook.subscribed === false ? "Not subscribed" : "Unknown";
   return <div className="waba-card" data-connected={String(status.connected)}>
-    <h2>{status.connected ? "Connected" : "Not connected"}</h2>
+    <h3>{title}</h3>
     {status.connected ? <Detail label="WhatsApp connection" items={[
       { key: "number", term: "Number", value: status.displayPhoneNumber ?? "—" },
       { key: "business", term: "Business name", value: status.verifiedName ?? "—" },

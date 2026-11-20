@@ -1,7 +1,7 @@
 ---
 app: waba
 title: WhatsApp Business
-version: '0.3.3'
+version: '0.3.4'
 summary: Use the official WhatsApp Business connection or a test-only linked device for the inbox and owner-approved replies. The app holds no credentials.
 needs:
   connections: []
@@ -55,6 +55,10 @@ packages that do not declare this storage cannot replace it.
 
 ## Screens
 
+**Inbox** and **Settings** appear in the workspace menu. On an Official API
+installation, open **Inbox → Tools** for Templates, Broadcasts and AI agent.
+Those tools are not shown for linked devices. Old tool URLs open the Inbox.
+
 - **Connection.** The operator gets a one-hour FavCRM signup link and
   finishes Meta signup with their own login. The link is held in memory
   only. Status always comes from an authoritative read: number,
@@ -69,6 +73,7 @@ packages that do not declare this storage cannot replace it.
   cannot be sent. A linked-device reply is accepted only when the exact
   WhatsApp server ACK is recorded; acceptance does not confirm delivery.
   Never retry an uncertain send automatically.
+  Replies are text only; inbound photo previews do not support uploads.
 - **Templates.** The templates FavCRM holds, with status, revision and
   variables. "Use in conversation" picks a conversation (kept while you
   move between pages) and sends an approved template through the

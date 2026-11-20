@@ -16,18 +16,18 @@
     {
       "name": "client.js",
       "media_type": "text/javascript",
-      "size": 105069,
-      "sha256": "sha256:7ebfbfbc09dc23e9be25d67a083e09d0cf86cbb38d33c830c314423a359a9044"
+      "size": 107235,
+      "sha256": "sha256:d5eca10d0bf79d3170468c730ac8c6059b6ccdb4a787ea7e6613bf31045b1ffa"
     },
     {
       "name": "waba.css",
       "media_type": "text/css",
-      "size": 33972,
-      "sha256": "sha256:944f65b7e7bbc919d597d874ef5bc85c5f69c27281fab10dc640718de628304d"
+      "size": 34933,
+      "sha256": "sha256:507428dc66eb0cbcc4152dac6cbe23b0fd5a3043d0ffffdc21b7539f5a3f35cd"
     }
   ],
   "provenance": {
-    "source_digest": "sha256:524b268ee373f0a1e9e6556cd13e0ac2f672c1cce5a87a4fc3a932062e3f3867",
+    "source_digest": "sha256:e9642a474cef44e0f908d45a05c0ca5f6648e44c919b55832e02a317ed537084",
     "sdk_digest": "sha256:fd65c974511e63b3996e9fa7e438fb4e39df5f508d11636116ef150fcc123e35",
     "toolchain_digest": "sha256:e21cfc8222db408abe6ba5a482520639d9cf4b96481c19aff4b4246af8a65e42"
   },
@@ -81,20 +81,8 @@
         "label": "Inbox"
       },
       {
-        "id": "templates",
-        "label": "Templates"
-      },
-      {
-        "id": "broadcasts",
-        "label": "Broadcasts"
-      },
-      {
         "id": "connection",
         "label": "Settings"
-      },
-      {
-        "id": "ai",
-        "label": "AI agent"
       }
     ]
   }

@@ -1,5 +1,5 @@
 import { ApiError,Button,EmptyState,ErrorNotice,Field,Loading,Notice } from "@cadence/screen-ui";
-import { Fragment,useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState } from "react";
+import { Fragment,useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState,type ReactNode } from "react";
 import { patchRoute } from "../../bridge/route";
 import { routable,useOnPush,useScope,type DisplayScope } from "../../bridge/scope";
 import { serviceCall,serviceSlot } from "../../bridge/services";
@@ -38,6 +38,7 @@ function Avatar({ name }: { name: string }) {
 
 const dayFormat = { en: new Intl.DateTimeFormat("en", { dateStyle: "medium" }), zh: new Intl.DateTimeFormat("zh-TW", { dateStyle: "medium" }) };
 const timeFormat = { en: new Intl.DateTimeFormat("en", { timeStyle: "short" }), zh: new Intl.DateTimeFormat("zh-TW", { timeStyle: "short" }) };
+const listDate = { en: new Intl.DateTimeFormat("en", { dateStyle: "short" }), zh: new Intl.DateTimeFormat("zh-TW", { dateStyle: "short" }) };
 function stamp(value: string | null) {
   const parsed = Date.parse(value ?? "");
   return Number.isFinite(parsed) ? parsed : null;
@@ -60,10 +61,9 @@ async function readWhileIndexing<T>(
   return undefined;
 }
 
-export default function Inbox({ scope, canReply, canTemplate, assist, handoff, routeId: routed, onRecipient, replyDirty, onDirtyChange, openSettings }: { scope: DisplayScope; canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; routeId: string | null; onRecipient: (r: Recipient) => void; replyDirty: boolean; onDirtyChange: (dirty: boolean) => void; openSettings: () => Promise<unknown> }) {
+export default function Inbox({ scope, canReply, canTemplate, assist, handoff, routeId: routed, initialId, onRecipient, replyDirty, onDirtyChange, openSettings, tools }: { scope: DisplayScope; canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; routeId: string | null; initialId: string | null; onRecipient: (r: Recipient) => void; replyDirty: boolean; onDirtyChange: (dirty: boolean) => void; openSettings: () => Promise<unknown>; tools: ReactNode }) {
   const zh = useScope()?.presentationLocale === "zh-TW", locale = zh ? "zh" : "en";
   const linked = scope.provider === "linked";
-  const providerName = linked ? (zh ? "已連結裝置" : "Linked device") : (zh ? "官方 API" : "Official API");
   const [settingsError, setSettingsError] = useState(false);
   const [rows, setRows] = useState<ConversationRow[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -72,7 +72,7 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
   const foregroundList = useRef(false);
   const [filter, setFilter] = useState("");
   // Ids outside the host route grammar stay a local selection.
-  const [local, setLocal] = useState<string | null>(null);
+  const [local, setLocal] = useState(initialId);
   const [newMessage, setNewMessage] = useState(false);
   const selected = routed ?? local;
   const openRow = useRef<HTMLElement | null>(null);
@@ -81,8 +81,8 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
   useLayoutEffect(() => {
     if (!focusThread.current) return;
     focusThread.current = false;
-    if (newMessage || selected) thread.current?.querySelector<HTMLElement>("h2")?.focus();
-    else openRow.current?.focus({ preventScroll: true });
+    if (newMessage || (selected && !openRow.current?.getClientRects().length)) thread.current?.querySelector<HTMLElement>("h2")?.focus({ preventScroll: true });
+    else if (!selected) openRow.current?.focus({ preventScroll: true });
   }, [newMessage, selected]);
   // `quiet` is a host-push refresh: no loading state, loaded pages kept, errors
   // leave what is shown in place.
@@ -122,45 +122,46 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
         <div className="waba-head">
           <h1 id="waba-inbox-title" tabIndex={-1}>{zh ? "收件匣" : "Inbox"}</h1>
           {linked && canReply && <Button size="sm" variant="primary" disabled={replyDirty} onClick={e => { openRow.current = e.currentTarget; focusThread.current = true; setLocal(null); setNewMessage(true); }}>{zh ? "新增訊息" : "New message"}</Button>}
+          {tools}
         </div>
-        <button className="waba-provider-link" type="button" disabled={replyDirty}
-          aria-label={zh ? `${providerName}：連線設定` : `${providerName}: Connection settings`}
-          onClick={() => { setSettingsError(false); void openSettings().catch(() => setSettingsError(true)); }}>
-          {providerName}
-          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg>
-        </button>
-        {settingsError && <ErrorNotice bare>{zh ? "無法開啟設定，請從側欄選取設定。" : "Couldn’t open Settings. Choose Settings in the sidebar."}</ErrorNotice>}
         <input className="field waba-search" type="search" aria-label={zh ? "搜尋已載入對話" : "Search loaded conversations"} placeholder={zh ? "搜尋對話…" : "Search conversations…"} value={filter} onChange={e => setFilter(e.target.value)} />
       </header>
       <div className="waba-list-scroll">
-      {list === "indexing" && rows.length > 0 && <p className="waba-muted" role="status">Indexing older conversations…</p>}
-      {(list === "loading" || list === "indexing") && !rows.length ? <Loading>{list === "indexing" ? "Indexing older conversations…" : "Reading conversations…"}</Loading>
-        : failed ? <ErrorNotice onRetry={() => { void page(null); }}>
-          <strong>{zh ? `無法載入${providerName}收件匣。` : `Couldn’t load the ${providerName} inbox.`}</strong>
-          <p>{zh ? "可以重試，或到連線設定檢查狀態及切換連線。" : "Retry here, or open connection settings to check status or choose the other connection."}</p>
-        </ErrorNotice>
-        : !shown.length ? <EmptyState title={needle ? "No matching conversations" : "No conversations yet"} name="conversations">{needle ? "Search covers loaded conversations. Load more or clear the search." : "New WhatsApp conversations appear here."}</EmptyState>
+      {list === "indexing" && rows.length > 0 && <p className="waba-muted" role="status">{zh ? "正在整理較早的對話…" : "Indexing older conversations…"}</p>}
+      {(list === "loading" || list === "indexing") && !rows.length ? <Loading>{list === "indexing" ? (zh ? "正在整理較早的對話…" : "Indexing older conversations…") : (zh ? "正在載入對話…" : "Loading conversations…")}</Loading>
+        : failed ? <>
+          <ErrorNotice onRetry={() => { void page(null); }}>{zh ? "無法載入對話。" : "Couldn’t load conversations."}</ErrorNotice>
+          <Button size="sm" variant="ghost" disabled={replyDirty} onClick={() => { setSettingsError(false); void openSettings().catch(() => setSettingsError(true)); }}>{zh ? "開啟設定" : "Open Settings"}</Button>
+          {settingsError && <ErrorNotice bare>{zh ? "請在側欄選取設定。" : "Choose Settings in the sidebar."}</ErrorNotice>}
+        </>
+        : !shown.length ? <EmptyState title={needle ? (zh ? "找不到符合的對話" : "No matching conversations") : (zh ? "暫未有對話" : "No conversations yet")} name="conversations">
+            {needle ? (cursor ? (zh ? "搜尋只涵蓋已載入的對話。你可以載入更多。" : "Search covers loaded conversations. Load more to widen it.") : (zh ? "清除或變更搜尋字詞。" : "Try a different search.")) : (zh ? "新的 WhatsApp 對話會在這裏顯示。" : "New WhatsApp conversations will appear here.")}
+          </EmptyState>
         : <ul className="waba-rows">{shown.map(r => {
           const phone = contactPhone(r, linked);
           const name = contactName(r, phone, linked, zh), at = stamp(r.lastMessage?.createdAt ?? null);
           const reference = linked && !r.contact.name && !phone ? contactReference(r) : null;
+          const unread = r.unreadCount ?? 0;
           return <li key={r.conversationId}>
-            <button type="button" className="waba-row" disabled={replyDirty} aria-current={r.conversationId === selected ? "true" : undefined} onClick={e => { openRow.current = e.currentTarget; select(r.conversationId); }}>
+            <button type="button" className="waba-row" disabled={replyDirty} aria-current={r.conversationId === selected ? "true" : undefined} data-unread={unread > 0 ? "yes" : undefined} onClick={e => { openRow.current = e.currentTarget; select(r.conversationId); }}>
               <Avatar name={name} />
               <span className="waba-row-name"><span className="waba-row-title">{name}</span>{reference && <span className="waba-row-ref" aria-label={zh ? `聯絡人編號末四位 ${reference}` : `Contact reference ending ${reference}`}>· {reference}</span>}</span>
-              {at === null ? <span /> : <time className="waba-row-time" dateTime={r.lastMessage?.createdAt ?? undefined}>{dayFormat[locale].format(at) === today ? timeFormat[locale].format(at) : dayFormat[locale].format(at)}</time>}
-              <span className="waba-row-last">{r.lastMessage?.direction === "outbound" ? "You: " : ""}{r.lastMessage?.body ?? ""}</span>
-              {r.unreadCount ? <span className="waba-badge" aria-label={`${r.unreadCount} unread`}>{r.unreadCount}</span> : null}
+              {at === null ? <span /> : <time className="waba-row-time" dateTime={r.lastMessage?.createdAt ?? undefined}>{dayFormat[locale].format(at) === today ? timeFormat[locale].format(at) : listDate[locale].format(at)}</time>}
+              <span className="waba-row-last">{r.lastMessage?.direction === "outbound" ? (zh ? "你：" : "You: ") : ""}{r.lastMessage?.body ?? ""}</span>
+              {unread > 0 && <span className="waba-badge" aria-label={zh ? `${unread} 則未讀訊息` : `${unread} unread`}>{unread > 99 ? "99+" : unread}</span>}
             </button>
           </li>;
         })}</ul>}
-        {cursor && !failed && <div className="waba-page-more"><Button size="sm" onClick={() => { void page(cursor); }} loading={list === "more" || list === "indexing"}>Load more</Button></div>}
+        {cursor && !failed && <div className="waba-page-more"><Button size="sm" onClick={() => { void page(cursor); }} loading={list === "more" || list === "indexing"}>{zh ? "載入更多" : "Load more"}</Button></div>}
       </div>
     </div>
     <div ref={thread} className="waba-thread">
       {newMessage ? <NewLinkedReply scope={scope} dirty={replyDirty} onDirtyChange={onDirtyChange} onBack={() => select(null)} onChanged={() => { void page(null, true); }} />
         : selected ? <Thread key={selected} scope={scope} id={selected} canReply={canReply} canTemplate={canTemplate} assist={assist} handoff={handoff} onRecipient={onRecipient} onDirtyChange={onDirtyChange} onBack={() => select(null)} replyDirty={replyDirty} />
-        : <div className="waba-thread-empty"><EmptyState title={zh ? "選擇對話" : "Select a conversation"} name="thread">{zh ? "在左側選擇對話，即可查看記錄及回覆。" : "Open a conversation to read its history and reply."}</EmptyState></div>}
+        : <div className="waba-thread-empty">
+            <p><strong>{zh ? "選擇對話" : "Select a conversation"}</strong></p>
+            <p className="waba-muted">{zh ? "打開對話以查看記錄及回覆。" : "Open a conversation to read and reply."}</p>
+          </div>}
     </div>
   </section>;
 }
@@ -363,7 +364,7 @@ function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient
           {draft && <DraftChip draft={draft} canInsert={canReply && windowOpen(c)} canDiscard={assist.discard} note={assistNote} onInsert={() => setInserted(i => ({ text: draft.text, n: (i?.n ?? 0) + 1 }))} onDiscard={() => { void discard(); }} />}
           {canReply ? <Composer scope={scope} conversationId={c.conversationId} handoffAt={c.handoffAt} freeformUntil={c.freeformUntil} open={scope.provider === "linked" || windowOpen(c)} autoTakeover={handoff.set} inserted={inserted} onSent={onSent} onChanged={reload} onDirtyChange={onDirtyChange} />
             : <Notice state="read-only">You can read this inbox. Only the workspace operator can reply.</Notice>}
-          {canTemplate && <Button size="sm" onClick={() => { onRecipient(c); void patchRoute({ section: "templates", view: "list", record_id: null }).catch(() => undefined); }}>Send an approved template…</Button>}
+          {canTemplate && <Button size="sm" disabled={replyDirty} onClick={() => onRecipient(c)}>{zh ? "使用已核准的範本…" : "Send an approved template…"}</Button>}
         </footer>}
       </div>
       {c && <aside id="waba-contact-details" className="waba-contact-details" aria-labelledby="waba-contact-title" hidden={!details}>

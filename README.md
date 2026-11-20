@@ -1,7 +1,8 @@
 # Cadence app: WhatsApp Business (WABA)
 
-An installable Cadence app with **Inbox**, **Settings**, and official-provider
-**Templates**, **Broadcasts** and **AI agent** sections.
+An installable Cadence app with **Inbox** and **Settings**. The Inbox's **Tools**
+menu shows **Templates**, **Broadcasts** and **AI agent** only for Official API.
+These tools no longer have independent sidebar routes.
 It follows the same layout as `favcrm/cadence-app-crm`: an `app/` bundle with `screens/waba/`,
 built on the host's pinned screen-ui SDK.
 
@@ -12,6 +13,7 @@ built on the host's pinned screen-ui SDK.
 - **Members** get the reads only: the inbox shows without the composer or the connect action.
 - **Linked photo previews.** On a compatible hosted backend, the inbox displays bounded JPEG previews supplied with ordinary linked-device photos. It never fetches provider URLs or shows view-once photos. Older messages, documents, video and audio do not gain photo previews.
 - **Inbox layout.** `0.3.3` keeps a floating reply dock below the history and shows what identity WhatsApp actually provides. The workspace owner chooses one active provider in Settings. Provider choice and AI reply mode are saved per installation on hosted Cadence (`app-storage/v1`), without disconnecting either provider. Provider availability and send approvals remain host-enforced; this setting is not a credential binding. Use a storage-compatible forward build once the migration is applied. Outbound media and shared contact notes/activity are not available in this build.
+- **0.3.4.** The transcript uses the full conversation pane; the floating reply dock keeps its original width. Selected conversations keep keyboard focus in the desktop list, while narrow layouts move focus into the thread. Status and provider choice belong to Settings, not the list toolbar.
 
 Plan: cadence CAD-1465 (`cad1465-waba-plan-20261018.md`).
 

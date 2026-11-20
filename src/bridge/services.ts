@@ -37,7 +37,7 @@ export interface CallArgs {
   "whatsapp.handoff.set": { conversation_id: string };
   "screen.route.patch": { section?: Section; view?: "list" | "new"; record_id?: string | null; segment_id?: string | null; replace?: boolean };
 }
-export type Section = "connection" | "inbox" | "templates" | "broadcasts" | "ai";
+export type Section = "connection" | "inbox";
 /** Q6: a segment or up to 1000 individual accounts; `all` and `csv` are not offered. */
 export type Audience = { source: "segment"; segment_id: string } | { source: "individual"; account_ids: string[] };
 export interface SlotArgs {

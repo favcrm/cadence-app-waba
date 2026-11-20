@@ -1,7 +1,6 @@
 import { Button,Detail,EmptyState,ErrorNotice,Field,Loading,Notice } from "@cadence/screen-ui";
 import { useCallback,useEffect,useRef,useState } from "react";
-import { patchRoute } from "../../bridge/route";
-import { routable,useOnPush,type DisplayScope } from "../../bridge/scope";
+import { useOnPush,useScope,type DisplayScope } from "../../bridge/scope";
 import { serviceCall,serviceSlot } from "../../bridge/services";
 import { declinedReason,errorText,parseConversations,parseReplyStatus,when,windowOpen,type ConversationRow,type ReplyStatus } from "./door";
 import { bodyIndexes,parsePrepared,parseTemplate,parseTemplates,render,sendOutcome,valueOk,type SendState,type Template } from "./door2";
@@ -12,11 +11,11 @@ export type Recipient = Pick<ConversationRow, "conversationId" | "contact" | "re
 type Load<T> = { state: "loading" } | { state: "ok"; value: T } | { state: "failed"; text: string };
 export const statusLabel = (s: string) => s.charAt(0) + s.slice(1).toLowerCase().replace(/_/g, " ");
 
-export default function Templates({ scope, canSend, routeId: routed, recipient, onRecipient }: { scope: DisplayScope; canSend: boolean; routeId: string | null; recipient: Recipient | null; onRecipient: (r: Recipient | null) => void }) {
+export default function Templates({ scope, canSend, recipient, onRecipient, openConversation }: { scope: DisplayScope; canSend: boolean; recipient: Recipient | null; onRecipient: (r: Recipient | null) => void; openConversation: (id: string) => void }) {
+  const zh = useScope()?.presentationLocale === "zh-TW";
   const [all, setAll] = useState(false);
   const [list, setList] = useState<Load<Template[]>>({ state: "loading" });
-  const [local, setLocal] = useState<string | null>(null);
-  const selected = routed ?? local;
+  const [selected, select] = useState<string | null>(null);
   // `quiet` is a host-push refresh: no loading state, and a failed read leaves
   // the shown data in place.
   const load = useCallback(async (quiet = false) => {
@@ -26,36 +25,32 @@ export default function Templates({ scope, canSend, routeId: routed, recipient, 
   }, [scope, all]);
   useEffect(() => { void load(); }, [load]);
   useOnPush(() => load(true));
-  function select(id: string | null) {
-    if (id === null || routable(id)) { setLocal(null); void patchRoute({ section: "templates", view: "list", record_id: id }).catch(() => undefined); }
-    else { setLocal(id); void patchRoute({ section: "templates", view: "list", record_id: null }).catch(() => undefined); }
-  }
-  return <section className="waba-page waba-split" data-selected={selected ? "yes" : "no"} aria-label="Templates">
+  return <section className="waba-page waba-split" data-selected={selected ? "yes" : "no"} aria-labelledby="waba-templates-title">
     <div className="waba-list" aria-labelledby="waba-templates-title">
       <header className="waba-head">
-        <h1 id="waba-templates-title">Templates</h1>
-        <Button size="sm" onClick={() => { void load(); }} loading={list.state === "loading"}>Refresh</Button>
+        <h1 id="waba-templates-title" tabIndex={-1}>{zh ? "訊息範本" : "Templates"}</h1>
+        <Button size="sm" onClick={() => { void load(); }} loading={list.state === "loading"}>{zh ? "重新整理" : "Refresh"}</Button>
       </header>
-      <label className="waba-check"><input type="checkbox" checked={all} onChange={e => setAll(e.target.checked)} /> Show every status, not only approved</label>
-      {recipient && <p className="waba-muted">Sending to {recipient.contact.name ?? recipient.contact.phone ?? recipient.conversationId}</p>}
-      {list.state === "loading" ? <Loading>Reading templates…</Loading>
+      <label className="waba-check"><input type="checkbox" checked={all} onChange={e => setAll(e.target.checked)} /> {zh ? "顯示所有狀態" : "Show all statuses"}</label>
+      {recipient && <p className="waba-muted">{zh ? "收件者：" : "Recipient: "}{recipient.contact.name ?? recipient.contact.phone ?? recipient.conversationId}</p>}
+      {list.state === "loading" ? <Loading>{zh ? "正在讀取範本…" : "Loading templates…"}</Loading>
         : list.state === "failed" ? <ErrorNotice onRetry={() => { void load(); }}>{list.text}</ErrorNotice>
-        : !list.value.length ? <EmptyState title={all ? "No templates" : "No approved templates"} name="templates">Templates are created and approved in Meta through FavCRM.</EmptyState>
+        : !list.value.length ? <EmptyState title={all ? (zh ? "沒有範本" : "No templates") : (zh ? "沒有已核准的範本" : "No approved templates")} name="templates">{zh ? "請在 FavCRM 管理 Meta 範本。" : "Manage Meta templates in FavCRM."}</EmptyState>
         : <ul className="waba-rows">{list.value.map(t => <li key={t.templateId}>
-            <button type="button" className="waba-row" aria-current={t.templateId === selected ? "true" : undefined} onClick={() => select(t.templateId)}>
-              <span className="waba-row-name">{t.name} <span className="waba-muted">{t.language}</span></span>
-              <span className="waba-muted">{statusLabel(t.status)}{t.category ? ` · ${t.category}` : ""} · revised {when(t.revision)}</span>
+            <button type="button" className="waba-row waba-record-row" aria-current={t.templateId === selected ? "true" : undefined} onClick={() => select(t.templateId)}>
+              <span className="waba-row-title">{t.name}</span>
+              <span className="waba-row-last">{statusLabel(t.status)}{t.language ? ` · ${t.language}` : ""}{t.category ? ` · ${t.category}` : ""}</span>
             </button>
           </li>)}</ul>}
     </div>
     <div className="waba-thread">
-      {selected ? <TemplateDetail key={selected} scope={scope} id={selected} canSend={canSend} recipient={recipient} onRecipient={onRecipient} onBack={() => select(null)} />
-        : <EmptyState title="Select a template" name="template">Its status, revision and variables appear here.</EmptyState>}
+      {selected ? <TemplateDetail key={selected} scope={scope} id={selected} canSend={canSend} recipient={recipient} onRecipient={onRecipient} openConversation={openConversation} onBack={() => select(null)} />
+        : <EmptyState title={zh ? "選擇範本" : "Select a template"} name="template">{zh ? "查看內容及核准狀態。" : "Review its content and approval status."}</EmptyState>}
     </div>
   </section>;
 }
 
-function TemplateDetail({ scope, id, canSend, recipient, onRecipient, onBack }: { scope: DisplayScope; id: string; canSend: boolean; recipient: Recipient | null; onRecipient: (r: Recipient | null) => void; onBack: () => void }) {
+function TemplateDetail({ scope, id, canSend, recipient, onRecipient, openConversation, onBack }: { scope: DisplayScope; id: string; canSend: boolean; recipient: Recipient | null; onRecipient: (r: Recipient | null) => void; openConversation: (id: string) => void; onBack: () => void }) {
   const [read, setRead] = useState<Load<Template>>({ state: "loading" });
   const show = useCallback(async (quiet = false) => {
     try { setRead({ state: "ok", value: parseTemplate(await serviceCall(scope, "whatsapp.template.show", { template_id: id })) }); }
@@ -85,7 +80,7 @@ function TemplateDetail({ scope, id, canSend, recipient, onRecipient, onBack }: 
         ]} />
         {!canSend ? <Notice state="read-only">You can read templates. Only the workspace operator can send one.</Notice>
           : !t!.sendable ? <Notice state="not-sendable">{t!.status === "APPROVED" ? "This approved template can't be sent from Cadence: it belongs to another number, or its header needs a variable or media." : "Only a template Meta has approved can be sent, so this one can't be used in a conversation."}</Notice>
-          : <UseInConversation key={recipient?.conversationId ?? "none"} scope={scope} template={t!} recipient={recipient} onRecipient={onRecipient} />}
+          : <UseInConversation key={recipient?.conversationId ?? "none"} scope={scope} template={t!} recipient={recipient} onRecipient={onRecipient} openConversation={openConversation} />}
       </>}
   </article>;
 }
@@ -96,7 +91,7 @@ const sample = (t: Template, n: number) => t.variables.find(v => v.index === n)?
  *  conversation, template and variables. Nothing is retried. */
 type Attempt = { effectId: string; variables: Record<string, string> } & ({ state: "approving" | "checking" } | { state: "cancelled"; reason: string | null } | { state: SendState } | { state: "status"; status: ReplyStatus });
 
-function UseInConversation({ scope, template, recipient, onRecipient }: { scope: DisplayScope; template: Template; recipient: Recipient | null; onRecipient: (r: Recipient | null) => void }) {
+function UseInConversation({ scope, template, recipient, onRecipient, openConversation }: { scope: DisplayScope; template: Template; recipient: Recipient | null; onRecipient: (r: Recipient | null) => void; openConversation: (id: string) => void }) {
   const indexes = bodyIndexes(template.bodyText);
   const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
@@ -148,7 +143,7 @@ function UseInConversation({ scope, template, recipient, onRecipient }: { scope:
     <h3>Use in conversation</h3>
     <p className="waba-muted">To <strong>{to.contact.name ?? to.contact.phone ?? to.conversationId}</strong>{to.contact.name && to.contact.phone ? ` · ${to.contact.phone}` : ""} · {windowOpen(to) ? "reply window open" : "reply window closed; an approved template may still be sent"}
       {" "}<Button size="sm" variant="ghost" disabled={busy || locked} onClick={() => onRecipient(null)}>Change</Button>
-      {" "}<Button size="sm" variant="ghost" onClick={() => { void patchRoute({ section: "inbox", view: "list", record_id: routable(to.conversationId) ? to.conversationId : null }).catch(() => undefined); }}>Open conversation</Button></p>
+      {" "}<Button size="sm" variant="ghost" disabled={busy || locked} onClick={() => openConversation(to.conversationId)}>Open conversation</Button></p>
     {indexes.map(n => <Field key={n} label={`Variable {{${n}}}`} hint={sample(template, n) ? `Example: ${sample(template, n)}` : undefined} error={values[n] !== undefined && !valueOk(values[n]) ? "1–1024 characters, no leading or trailing spaces." : undefined}>
       {c => <input {...c} className="field" value={values[n] ?? ""} maxLength={1024} disabled={busy || locked} onChange={e => setValues(v => ({ ...v, [n]: e.target.value }))} />}
     </Field>)}
