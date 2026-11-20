@@ -15,16 +15,27 @@ export function useScope() { return useSyncExternalStore(subscribeScope, getScop
 // Counts accepted host pushes. A page re-reads in the background on each one.
 let pushes = 0;
 const getPushes = () => pushes;
-/** Runs `refresh` after every accepted host push (never on mount), one at a
- *  time: a push that lands while a refresh is in flight is skipped. */
+/** Never run on mount. Coalesce pushes received during a refresh into one
+ * more read so the last inbound change is not lost. */
 export function useOnPush(refresh: () => Promise<unknown>): void {
   const count = useSyncExternalStore(subscribeScope, getPushes);
-  const seen = useRef(count), latest = useRef(refresh), running = useRef(false);
+  const seen = useRef(count), latest = useRef(refresh), running = useRef(false), mounted = useRef(false);
   latest.current = refresh;
   useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  useEffect(() => {
     if (count === seen.current || running.current) return;
-    seen.current = count; running.current = true;
-    void latest.current().finally(() => { running.current = false; });
+    running.current = true;
+    void (async () => {
+      try {
+        while (mounted.current && seen.current !== getPushes()) {
+          seen.current = getPushes();
+          await latest.current().catch(() => undefined);
+        }
+      } finally { running.current = false; }
+    })();
   }, [count]);
 }
 export function scopeError() { return error; }

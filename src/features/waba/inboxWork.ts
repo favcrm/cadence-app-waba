@@ -32,7 +32,6 @@ function validFields(v: ThreadFields): boolean {
     (v.due === null || date(v.due)) && integer(v.seenInbound);
 }
 export function effectiveThreadState(work: ThreadFields | null | undefined, inboundVersion: number): ThreadState {
-  if (!integer(inboundVersion) || (work != null && !validFields(work))) invalid("Invalid inbox state", 400);
   return !work || inboundVersion > work.seenInbound ? "needs_reply" : work.state;
 }
 function workReceipt(value: unknown, installId: string, expectedScope?: string): ThreadWork {
