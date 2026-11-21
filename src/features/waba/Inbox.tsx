@@ -339,7 +339,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const zh = useScope()?.presentationLocale === "zh-TW";
   const unavailablePreview = zh ? "無法顯示預覽" : "Preview unavailable";
   const [conversation, setConversation] = useState<Load<Conversation>>(() => initial?.conversationId === id ? { state: "ok", value: initial } : { state: "loading" });
-  const [messages, setMessages] = useState<Load<{ rows: Message[]; cursor: string | null }>>({ state: "loading" });
+  const [messages, setMessages] = useState<Load<{ rows: Message[]; cursor: string | null; previousHeight?: number }>>({ state: "loading" });
   const [indexing, setIndexing] = useState(false);
   const messageRequest = useRef(0);
   const foregroundMessages = useRef(false);
@@ -347,7 +347,6 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const messagePane = useRef<HTMLDivElement>(null);
   const keepBottom = useRef(true);
   const timelineScroll = useRef({ width: 0, height: 0, top: 0 });
-  const prependHeight = useRef<number | null>(null);
   const [showLatest, setShowLatest] = useState(false);
   const [details, setDetails] = useState(false);
   const replyEdited = useRef(false), workEdited = useRef(false);
@@ -381,7 +380,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
     const pane = timeline.current;
     if (!pane) return;
     const observer = new ResizeObserver(() => {
-      if (keepBottom.current && prependHeight.current === null) pane.scrollTop = pane.scrollHeight;
+      if (keepBottom.current) pane.scrollTop = pane.scrollHeight;
       const last = timelineScroll.current;
       last.width = pane.clientWidth;
       last.height = pane.clientHeight;
@@ -412,8 +411,9 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
       );
       if (!got) return;
       setIndexing(false);
+      const previousHeight = after ? timeline.current?.scrollHeight : undefined;
       setMessages(m => m.state === "ok" && (after || quiet)
-        ? { state: "ok", value: { rows: after ? [...m.value.rows, ...got.rows.filter(n => !m.value.rows.some(o => o.id === n.id))] : [...got.rows, ...m.value.rows.filter(o => !got.rows.some(n => n.id === o.id))], cursor: quiet ? m.value.cursor : got.cursor } }
+        ? { state: "ok", value: { rows: after ? [...m.value.rows, ...got.rows.filter(n => !m.value.rows.some(o => o.id === n.id))] : [...got.rows, ...m.value.rows.filter(o => !got.rows.some(n => n.id === o.id))], cursor: quiet ? m.value.cursor : got.cursor, previousHeight } }
         : { state: "ok", value: { rows: got.rows, cursor: got.cursor } });
     } catch (e) {
       if (request !== messageRequest.current) return;
@@ -464,11 +464,14 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   }, [composeId]);
   useLayoutEffect(() => {
     const pane = timeline.current;
+    if (pane && !keepBottom.current && messages.state === "ok" && messages.value.previousHeight !== undefined) {
+      pane.scrollTop += pane.scrollHeight - messages.value.previousHeight;
+    }
+  }, [messages]);
+  useLayoutEffect(() => {
+    const pane = timeline.current;
     if (!pane) return;
-    if (prependHeight.current !== null && !foregroundMessages.current) {
-      pane.scrollTop += pane.scrollHeight - prependHeight.current;
-      prependHeight.current = null;
-    } else if (keepBottom.current && prependHeight.current === null) pane.scrollTop = pane.scrollHeight;
+    if (keepBottom.current) pane.scrollTop = pane.scrollHeight;
     channel.acknowledgeReplyInset(replyInset);
   }, [messages, details, replyInset]);
   useLayoutEffect(() => {
@@ -515,7 +518,6 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const day = dayFormat[locale], time = timeFormat[locale];
   const loadOlder = (cursor: string) => {
     if (foregroundMessages.current) return;
-    prependHeight.current = timeline.current?.scrollHeight ?? null;
     void read(cursor);
   };
   return <article className="waba-conversation" data-details={details} aria-labelledby="waba-thread-title" onKeyDown={e => {
