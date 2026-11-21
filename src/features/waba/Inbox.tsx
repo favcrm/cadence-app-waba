@@ -72,8 +72,8 @@ async function readWhileIndexing<T>(
   return undefined;
 }
 
-type Queue = "all" | ThreadState | "due";
-const queues = ["all", "needs_reply", "waiting", "done", "due"] as const;
+type Queue = "all" | "unread" | ThreadState | "due";
+const workQueues = ["needs_reply", "waiting", "done", "due"] as const;
 type WorkIndex = { records: Map<string, ThreadWork>; checked: Set<string> };
 const emptyWorkIndex = (): WorkIndex => ({ records: new Map(), checked: new Set() });
 function calendarDay(now: Date) {
@@ -202,9 +202,15 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
   const needle = filter.trim().toLocaleLowerCase();
   const browse = useWorkBrowse(scope, inboxScope, queue === "due" ? "due" : queue === "all" && needle ? "names" : null, queue === "due" ? dueDay : needle);
   const recordFor = (row: ConversationRow) => row.work && inboxScope && validWorkRef(row.work.ref, inboxScope) ? work.records.get(row.work.ref) : undefined;
+  const canFilterUnread = rows.some(row => row.unreadCount !== null);
+  useLayoutEffect(() => {
+    if (!canFilterUnread && queue === "unread") setQueue("all");
+  }, [canFilterUnread, queue]);
+  const unreadCount = rows.filter(row => (row.unreadCount ?? 0) > 0).length;
   const shown = queue === "due" ? [] : rows.filter(r => {
     const record = recordFor(r);
-    if (queue !== "all" && (!r.work || !work.checked.has(r.work.ref) || effectiveThreadState(record, r.work.inboundVersion) !== queue)) return false;
+    if (queue === "unread" ? (r.unreadCount ?? 0) <= 0
+      : queue !== "all" && (!r.work || !work.checked.has(r.work.ref) || effectiveThreadState(record, r.work.inboundVersion) !== queue)) return false;
     return !needle || [record?.name, r.contact.name, contactPhone(r, linked), r.lastMessage?.body].some(v => v?.toLocaleLowerCase().includes(needle));
   });
   const pageByRef = useMemo(() => new Map(rows.flatMap(r => r.work ? [[r.work.ref, r] as const] : [])), [rows]);
@@ -226,12 +232,19 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
           {tools}
         </div>
         <input className="field waba-search" type="search" aria-label={zh ? "搜尋對話" : "Search conversations"} placeholder={zh ? "搜尋對話…" : "Search conversations…"} value={filter} onChange={e => setFilter(e.target.value)} />
-        {inboxScope && <select className="field waba-queue" aria-label={zh ? "篩選對話" : "Conversation filter"} value={queue} onChange={e => {
-          const next = queues.find(value => value === e.currentTarget.value);
-          if (next) setQueue(next);
-        }}>
-          {queues.map(value => <option key={value} value={value}>{value === "all" ? (zh ? "所有對話" : "All conversations") : value === "due" ? (zh ? "待跟進" : "Follow-ups due") : threadStateLabel(value, zh)}</option>)}
-        </select>}
+        {(canFilterUnread || inboxScope) && <div className="waba-list-filters" role="group" aria-label={zh ? "篩選對話" : "Filter conversations"}>
+          <button type="button" aria-pressed={queue === "all"} onClick={() => setQueue("all")}>{zh ? "全部" : "All"}</button>
+          {canFilterUnread && <button type="button" aria-pressed={queue === "unread"} onClick={() => setQueue("unread")}>
+            {zh ? "未讀" : "Unread"}{unreadCount > 0 && <span className="waba-unread-count">{unreadCount}</span>}
+          </button>}
+          {inboxScope && <select className="field waba-queue" aria-label={zh ? "按跟進狀態篩選" : "Filter by follow-up"} value={queue === "all" || queue === "unread" ? "" : queue} onChange={e => {
+            const next = workQueues.find(value => value === e.currentTarget.value);
+            setQueue(next ?? "all");
+          }}>
+            <option value="">{zh ? "跟進" : "Follow-up"}</option>
+            {workQueues.map(value => <option key={value} value={value}>{value === "due" ? (zh ? "待跟進" : "Follow-ups due") : threadStateLabel(value, zh)}</option>)}
+          </select>}
+        </div>}
       </header>
       <div className="waba-list-scroll">
       {workError && queue !== "due" && <ErrorNotice bare onRetry={() => { void page(null, true); }}>{zh ? "無法載入跟進狀態。" : "Couldn’t refresh conversation work."}</ErrorNotice>}
@@ -326,13 +339,14 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const zh = useScope()?.presentationLocale === "zh-TW";
   const unavailablePreview = zh ? "無法顯示預覽" : "Preview unavailable";
   const [conversation, setConversation] = useState<Load<Conversation>>(() => initial?.conversationId === id ? { state: "ok", value: initial } : { state: "loading" });
-  const [messages, setMessages] = useState<Load<{ rows: Message[]; cursor: string | null }>>({ state: "loading" });
+  const [messages, setMessages] = useState<Load<{ rows: Message[]; cursor: string | null; previousAnchor?: { row: HTMLElement; top: number } }>>({ state: "loading" });
   const [indexing, setIndexing] = useState(false);
   const messageRequest = useRef(0);
   const foregroundMessages = useRef(false);
   const timeline = useRef<HTMLDivElement>(null);
+  const messagePane = useRef<HTMLDivElement>(null);
   const keepBottom = useRef(true);
-  const prependHeight = useRef<number | null>(null);
+  const timelineScroll = useRef({ width: 0, height: 0, top: 0 });
   const [showLatest, setShowLatest] = useState(false);
   const [details, setDetails] = useState(false);
   const replyEdited = useRef(false), workEdited = useRef(false);
@@ -365,16 +379,12 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   useLayoutEffect(() => {
     const pane = timeline.current;
     if (!pane) return;
-    if (prependHeight.current !== null && !foregroundMessages.current) {
-      pane.scrollTop += pane.scrollHeight - prependHeight.current;
-      prependHeight.current = null;
-    } else if (keepBottom.current) pane.scrollTop = pane.scrollHeight;
-  }, [messages, details]);
-  useLayoutEffect(() => {
-    const pane = timeline.current;
-    if (!pane) return;
     const observer = new ResizeObserver(() => {
-      if (keepBottom.current && prependHeight.current === null) pane.scrollTop = pane.scrollHeight;
+      if (keepBottom.current) pane.scrollTop = pane.scrollHeight;
+      const last = timelineScroll.current;
+      last.width = pane.clientWidth;
+      last.height = pane.clientHeight;
+      last.top = pane.scrollTop;
     });
     observer.observe(pane);
     return () => observer.disconnect();
@@ -401,8 +411,12 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
       );
       if (!got) return;
       setIndexing(false);
+      // A dock resize can change the scroll extent in the same commit as an
+      // older page. Anchor a retained row, not the height including the dock.
+      const row = after ? timeline.current?.querySelector<HTMLElement>(".waba-message") : null;
+      const previousAnchor = row ? { row, top: row.offsetTop } : undefined;
       setMessages(m => m.state === "ok" && (after || quiet)
-        ? { state: "ok", value: { rows: after ? [...m.value.rows, ...got.rows.filter(n => !m.value.rows.some(o => o.id === n.id))] : [...got.rows, ...m.value.rows.filter(o => !got.rows.some(n => n.id === o.id))], cursor: quiet ? m.value.cursor : got.cursor } }
+        ? { state: "ok", value: { rows: after ? [...m.value.rows, ...got.rows.filter(n => !m.value.rows.some(o => o.id === n.id))] : [...got.rows, ...m.value.rows.filter(o => !got.rows.some(n => n.id === o.id))], cursor: quiet ? m.value.cursor : got.cursor, previousAnchor } }
         : { state: "ok", value: { rows: got.rows, cursor: got.cursor } });
     } catch (e) {
       if (request !== messageRequest.current) return;
@@ -445,11 +459,68 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const composeId = scope.provider === "linked" && canReply && channel.hostCompose
     && /^[A-Za-z0-9._:-]{1,128}@(s\.whatsapp\.net|lid|g\.us)$/.test(id) ? id : null;
   const replyAvailability = useSyncExternalStore(channel.subscribeReplyAvailability, () => channel.availabilityFor(composeId));
-  useEffect(() => {
+  const replyInset = useSyncExternalStore(channel.subscribeReplyAvailability, () => channel.insetFor(composeId));
+  useLayoutEffect(() => {
     if (composeId === null) return;
     channel.nominateConversation(composeId);
     return () => channel.nominateConversation(null);
   }, [composeId]);
+  useLayoutEffect(() => {
+    const pane = messagePane.current;
+    if (!pane) return;
+    // Details hides the dock without retiring this nomination. Keep the list
+    // extent through the zero inset and re-open so scrollTop cannot clamp.
+    if (replyInset === null) {
+      pane.removeAttribute("data-reply-overlay");
+      pane.style.removeProperty("--waba-reply-dock-height");
+    } else if (replyInset.px > 0) {
+      pane.setAttribute("data-reply-overlay", "");
+      pane.style.setProperty("--waba-reply-dock-height", `${replyInset.px}px`);
+    }
+  }, [replyInset]);
+  useLayoutEffect(() => {
+    const pane = timeline.current;
+    const anchor = messages.state === "ok" && messages.value.previousAnchor;
+    if (pane && anchor && !keepBottom.current && pane.contains(anchor.row)) {
+      pane.scrollTop += anchor.row.offsetTop - anchor.top;
+    }
+  }, [messages]);
+  useLayoutEffect(() => {
+    const pane = timeline.current;
+    if (!pane) return;
+    if (keepBottom.current) pane.scrollTop = pane.scrollHeight;
+    channel.acknowledgeReplyInset(replyInset);
+  }, [messages, details, replyInset]);
+  useLayoutEffect(() => {
+    const pane = messagePane.current;
+    if (composeId === null || !channel.hostReplyLayout || !pane) return;
+    const measure = () => {
+      if (!channel.hostReplyLayout) return;
+      if (getComputedStyle(pane).visibility === "hidden") {
+        channel.publishReplyLayout(null);
+        return;
+      }
+      const width = document.documentElement.clientWidth;
+      if (!width) return;
+      const rect = pane.getBoundingClientRect();
+      const left = Math.max(0, Math.min(10000, Math.round(rect.left / width * 10000)));
+      const right = Math.max(0, Math.min(10000, Math.round(rect.right / width * 10000)));
+      if (left < right) channel.publishReplyLayout([left, right]);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(pane);
+    observer.observe(document.documentElement);
+    window.addEventListener("resize", measure);
+    const unsubscribe = channel.subscribeReplyAvailability(() => {
+      if (!channel.hostReplyLayout) observer.disconnect();
+    });
+    return () => {
+      unsubscribe();
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [composeId, details]);
   const linked = scope.provider === "linked";
   const phone = c ? contactPhone(c, linked) : null;
   const workLink = inboxScope && c?.work && validWorkRef(c.work.ref, inboxScope) ? c.work : null;
@@ -464,7 +535,6 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const day = dayFormat[locale], time = timeFormat[locale];
   const loadOlder = (cursor: string) => {
     if (foregroundMessages.current) return;
-    prependHeight.current = timeline.current?.scrollHeight ?? null;
     void read(cursor);
   };
   return <article className="waba-conversation" data-details={details} aria-labelledby="waba-thread-title" onKeyDown={e => {
@@ -482,7 +552,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
       {workLink && work.checked.has(workLink.ref) && <span className="waba-work-state">{threadStateLabel(effectiveThreadState(record, workLink.inboundVersion), zh)}</span>}
     </header>
     <div className="waba-conversation-body">
-      <div className="waba-thread-main">
+      <div className="waba-thread-main" ref={messagePane}>
         {replyAvailability && <div className="waba-reply-availability" role="status">
           {replyAvailability !== "verified" && <Notice state={replyAvailability}>
             {replyAvailability === "checking" ? (zh ? "正在核對收件人…" : "Verifying recipient…")
@@ -494,12 +564,16 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
             // Native Home/End scroll animations can continue after Jump to latest.
             if (e.target !== e.currentTarget || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || (e.key !== "Home" && e.key !== "End")) return;
             e.preventDefault();
-            const pane = e.currentTarget;
-            pane.scrollTo({ top: e.key === "Home" ? 0 : pane.scrollHeight, behavior: "instant" });
-          }} onScroll={() => {
-            const pane = timeline.current;
-            if (!pane) return;
-            keepBottom.current = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 72;
+            if (e.key === "End") jumpToLatest();
+            else e.currentTarget.scrollTo({ top: 0, behavior: "instant" });
+          }} onScroll={e => {
+            const pane = e.currentTarget, last = timelineScroll.current;
+            const top = pane.scrollTop, height = pane.clientHeight;
+            // A dock resize can clamp scrollTop and dispatch scroll before ResizeObserver.
+            // Only movement in the settled viewport changes whether the reader follows latest.
+            if (height !== last.height || pane.clientWidth !== last.width || top === last.top) return;
+            last.top = top;
+            keepBottom.current = pane.scrollHeight - top - height < 72;
             setShowLatest(!keepBottom.current);
           }}>
             <div className="waba-timeline-inner">
@@ -529,7 +603,9 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
           </div>
           {showLatest && <div className="waba-jump"><Button size="sm" onClick={jumpToLatest}>{zh ? "跳至最新訊息" : "Jump to latest"}</Button></div>}
         </div>
-        {c && <footer className="waba-thread-footer">
+        {/* The admitted linked composer is on the board. Official actions and
+            the local-composer/read-only footer stay on their existing path. */}
+        {c && composeId === null && <footer className="waba-thread-footer">
           <TakeoverBar scope={scope} id={id} handoffAt={c.handoffAt} rights={handoff} onChanged={() => { void show(); }} />
           {assist.brief && <Brief scope={scope} id={id} canOpen={assist.open} />}
           {draft && <DraftChip draft={draft} canInsert={canReply && windowOpen(c)} canDiscard={assist.discard} note={assistNote} onInsert={() => setInserted(i => ({ text: draft.text, n: (i?.n ?? 0) + 1 }))} onDiscard={() => { void discard(); }} />}

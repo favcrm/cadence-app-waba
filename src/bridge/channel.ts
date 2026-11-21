@@ -15,12 +15,18 @@ function refusal(v: unknown): ApiError {
   return new ApiError(v.text, status, { code: v.code });
 }
 type ReplyAvailability = "checking" | "blocked" | "verified";
+type ReplyInset = { nomination: number; seq: number; px: number };
 class Channel {
   private port: MessagePort | null = null;
   private retired = false;
   private serial = 0;
   private composeSupported = false;
   private replyAvailabilitySupported = false;
+  private replyLayoutSupported = false;
+  private replyOverlaySupported = false;
+  private replyInset: ReplyInset | null = null;
+  private acknowledgedInset: ReplyInset | null = null;
+  private lastLayout: string | null = null;
   private nomination = 0;
   private conversationId: string | null = null;
   private replyAvailability: ReplyAvailability = "checking";
@@ -33,14 +39,35 @@ class Channel {
     if (!this.replyAvailabilitySupported || this.retired || id === null) return null;
     return id === this.conversationId ? this.replyAvailability : "checking";
   }
+  insetFor(id: string | null): ReplyInset | null {
+    return this.replyOverlaySupported && !this.retired && id !== null && id === this.conversationId ? this.replyInset : null;
+  }
+  acknowledgeReplyInset(inset: ReplyInset | null): void {
+    if (!inset || !this.replyOverlaySupported || this.retired || !this.port ||
+        this.conversationId === null || inset !== this.replyInset || inset.nomination !== this.nomination ||
+        inset === this.acknowledgedInset) return;
+    this.acknowledgedInset = inset;
+    this.port.postMessage({ v: 2, op: "whatsapp-reply-inset-ready", nomination: inset.nomination, seq: inset.seq, px: inset.px });
+  }
   private announceReplyAvailability(): void {
     this.replyListeners.forEach(listener => listener());
   }
   get hostCompose(): boolean { return this.composeSupported; }
+  get hostReplyLayout(): boolean { return this.replyLayoutSupported && !this.retired; }
+  publishReplyLayout(bounds: [number, number] | null): void {
+    if (!this.hostReplyLayout || !this.port || this.conversationId === null) return;
+    const key = bounds === null ? "hidden" : `${bounds[0]}:${bounds[1]}`;
+    if (key === this.lastLayout) return;
+    this.lastLayout = key;
+    this.port.postMessage({ v: 2, op: "whatsapp-reply-layout", nomination: this.nomination, bounds });
+  }
   nominateConversation(conversationId: string | null): void {
     if (!this.composeSupported || !this.port || this.retired || this.conversationId === conversationId) return;
     this.conversationId = conversationId;
     this.nomination++;
+    this.lastLayout = null;
+    this.replyInset = null;
+    this.acknowledgedInset = null;
     this.replyAvailability = "checking";
     this.port.postMessage({ v: 2, op: "whatsapp-compose", conversation_id: conversationId });
     this.announceReplyAvailability();
@@ -64,9 +91,12 @@ class Channel {
     window.parent.postMessage({ v: 1, op: "init", tag: boot.tag, bridge_nonce: boot.bridge_nonce, generation: boot.generation }, boot.parent_origin, [pair.port2]);
     this.composeSupported = window.location.hash === "#cadence-whatsapp-compose-v1";
     this.replyAvailabilitySupported = this.composeSupported && new URLSearchParams(window.location.search).get("wa_compose_availability") === "1";
+    this.replyLayoutSupported = this.replyAvailabilitySupported && new URLSearchParams(window.location.search).get("wa_compose_layout") === "1";
+    this.replyOverlaySupported = this.replyLayoutSupported && new URLSearchParams(window.location.search).get("wa_compose_inset_ack") === "1";
     pair.port1.postMessage({ v: 1, op: "ready", accepts: ["screen.v2", "screen-records.v1", "screen-locale.v1",
       ...(this.composeSupported ? ["screen-whatsapp-compose.v1"] : []),
-      ...(this.replyAvailabilitySupported ? ["screen-whatsapp-reply-availability.v1"] : [])] });
+      ...(this.replyAvailabilitySupported ? ["screen-whatsapp-reply-availability.v1"] : []),
+      ...(this.replyLayoutSupported ? [this.replyOverlaySupported ? "screen-whatsapp-reply-layout.v2" : "screen-whatsapp-reply-layout.v1"] : [])] });
     window.addEventListener("pagehide", () => this.retire(new ApiError("WhatsApp mount retired", 403)), { once: true });
   }
   request(kind: "call" | "slot", verb: string, args: Record<string, unknown>): Promise<unknown> {
@@ -104,6 +134,17 @@ class Channel {
       }
       return;
     }
+    if (data.op === "whatsapp-reply-inset") {
+      if (!this.replyOverlaySupported || !exact(data, ["v", "op", "nomination", "seq", "px"]) ||
+          typeof data.nomination !== "number" || !Number.isSafeInteger(data.nomination) || data.nomination < 1 ||
+          typeof data.seq !== "number" || !Number.isSafeInteger(data.seq) || data.seq < 1 ||
+          typeof data.px !== "number" || !Number.isInteger(data.px) || data.px < 0 || data.px > 512) throw invalid();
+      if (this.conversationId !== null && data.nomination === this.nomination && data.seq > (this.replyInset?.seq ?? 0)) {
+        this.replyInset = { nomination: data.nomination, seq: data.seq, px: data.px };
+        this.announceReplyAvailability();
+      }
+      return;
+    }
     if (data.op !== "reply" && data.op !== "slot-state") throw invalid();
     if (bytes(data) > 1049600 || typeof data.id !== "string") throw invalid();
     const p = this.pending.get(data.id);
@@ -137,6 +178,8 @@ class Channel {
   retire(error: ApiError): void {
     if (this.retired) return;
     this.retired = true;
+    this.replyInset = null;
+    this.acknowledgedInset = null;
     this.port?.close(); this.port = null;
     for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(error); }
     this.pending.clear(); clearScope(error.message);
