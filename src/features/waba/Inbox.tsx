@@ -464,6 +464,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const composeId = scope.provider === "linked" && canReply && channel.hostCompose
     && /^[A-Za-z0-9._:-]{1,128}@(s\.whatsapp\.net|lid|g\.us)$/.test(id) ? id : null;
   const replyAvailability = useSyncExternalStore(channel.subscribeReplyAvailability, () => channel.availabilityFor(composeId));
+  const replyInset = useSyncExternalStore(channel.subscribeReplyAvailability, () => channel.insetFor(composeId));
   useLayoutEffect(() => {
     if (composeId === null) return;
     channel.nominateConversation(composeId);
@@ -531,7 +532,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
       {workLink && work.checked.has(workLink.ref) && <span className="waba-work-state">{threadStateLabel(effectiveThreadState(record, workLink.inboundVersion), zh)}</span>}
     </header>
     <div className="waba-conversation-body">
-      <div className="waba-thread-main" ref={messagePane}>
+      <div className="waba-thread-main" ref={messagePane} style={replyInset ? { paddingBlockEnd: replyInset } : undefined}>
         {replyAvailability && <div className="waba-reply-availability" role="status">
           {replyAvailability !== "verified" && <Notice state={replyAvailability}>
             {replyAvailability === "checking" ? (zh ? "正在核對收件人…" : "Verifying recipient…")

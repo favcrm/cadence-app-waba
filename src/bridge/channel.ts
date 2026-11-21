@@ -22,6 +22,8 @@ class Channel {
   private composeSupported = false;
   private replyAvailabilitySupported = false;
   private replyLayoutSupported = false;
+  private replyOverlaySupported = false;
+  private replyInset = 0;
   private lastLayout: string | null = null;
   private nomination = 0;
   private conversationId: string | null = null;
@@ -34,6 +36,9 @@ class Channel {
   availabilityFor(id: string | null): ReplyAvailability | null {
     if (!this.replyAvailabilitySupported || this.retired || id === null) return null;
     return id === this.conversationId ? this.replyAvailability : "checking";
+  }
+  insetFor(id: string | null): number {
+    return this.replyOverlaySupported && !this.retired && id !== null && id === this.conversationId ? this.replyInset : 0;
   }
   private announceReplyAvailability(): void {
     this.replyListeners.forEach(listener => listener());
@@ -52,6 +57,7 @@ class Channel {
     this.conversationId = conversationId;
     this.nomination++;
     this.lastLayout = null;
+    this.replyInset = 0;
     this.replyAvailability = "checking";
     this.port.postMessage({ v: 2, op: "whatsapp-compose", conversation_id: conversationId });
     this.announceReplyAvailability();
@@ -76,10 +82,11 @@ class Channel {
     this.composeSupported = window.location.hash === "#cadence-whatsapp-compose-v1";
     this.replyAvailabilitySupported = this.composeSupported && new URLSearchParams(window.location.search).get("wa_compose_availability") === "1";
     this.replyLayoutSupported = this.replyAvailabilitySupported && new URLSearchParams(window.location.search).get("wa_compose_layout") === "1";
+    this.replyOverlaySupported = this.replyLayoutSupported && new URLSearchParams(window.location.search).get("wa_compose_overlay") === "1";
     pair.port1.postMessage({ v: 1, op: "ready", accepts: ["screen.v2", "screen-records.v1", "screen-locale.v1",
       ...(this.composeSupported ? ["screen-whatsapp-compose.v1"] : []),
       ...(this.replyAvailabilitySupported ? ["screen-whatsapp-reply-availability.v1"] : []),
-      ...(this.replyLayoutSupported ? ["screen-whatsapp-reply-layout.v1"] : [])] });
+      ...(this.replyLayoutSupported ? [this.replyOverlaySupported ? "screen-whatsapp-reply-layout.v2" : "screen-whatsapp-reply-layout.v1"] : [])] });
     window.addEventListener("pagehide", () => this.retire(new ApiError("WhatsApp mount retired", 403)), { once: true });
   }
   request(kind: "call" | "slot", verb: string, args: Record<string, unknown>): Promise<unknown> {
@@ -117,6 +124,16 @@ class Channel {
       }
       return;
     }
+    if (data.op === "whatsapp-reply-inset") {
+      if (!this.replyOverlaySupported || !exact(data, ["v", "op", "nomination", "px"]) ||
+          typeof data.nomination !== "number" || !Number.isSafeInteger(data.nomination) || data.nomination < 1 ||
+          typeof data.px !== "number" || !Number.isInteger(data.px) || data.px < 0 || data.px > 512) throw invalid();
+      if (this.conversationId !== null && data.nomination === this.nomination && data.px !== this.replyInset) {
+        this.replyInset = data.px;
+        this.announceReplyAvailability();
+      }
+      return;
+    }
     if (data.op !== "reply" && data.op !== "slot-state") throw invalid();
     if (bytes(data) > 1049600 || typeof data.id !== "string") throw invalid();
     const p = this.pending.get(data.id);
@@ -150,6 +167,7 @@ class Channel {
   retire(error: ApiError): void {
     if (this.retired) return;
     this.retired = true;
+    this.replyInset = 0;
     this.port?.close(); this.port = null;
     for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(error); }
     this.pending.clear(); clearScope(error.message);
