@@ -91,7 +91,7 @@
 .waba-timeline-inner:has(.waba-messages) { min-block-size: 100%; align-content: end; }
 .waba-jump { position: absolute; inset-inline-end: var(--waba-chat-inset); bottom: 0.625rem; }
 .waba-messages { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
-.waba-thread-main[data-reply-overlay] { --waba-reply-clearance: calc(var(--waba-reply-dock-height) + 1.5rem); }
+.waba-thread-main[data-reply-overlay] { --waba-reply-clearance: calc(var(--waba-reply-dock-height) + 24px); }
 .waba-thread-main[data-reply-overlay] .waba-timeline {
   scroll-padding-block-end: var(--waba-reply-clearance);
   scrollbar-gutter: stable;

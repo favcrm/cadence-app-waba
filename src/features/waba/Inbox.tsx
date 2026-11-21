@@ -1,5 +1,5 @@
 import { ApiError,Button,EmptyState,ErrorNotice,Field,Loading,Notice } from "@cadence/screen-ui";
-import { Fragment,useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState,useSyncExternalStore,type CSSProperties,type ReactNode } from "react";
+import { Fragment,useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState,useSyncExternalStore,type ReactNode } from "react";
 import { channel } from "../../bridge/channel";
 import { patchRoute } from "../../bridge/route";
 import { routable,useOnPush,useScope,type DisplayScope } from "../../bridge/scope";
@@ -460,12 +460,24 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
     && /^[A-Za-z0-9._:-]{1,128}@(s\.whatsapp\.net|lid|g\.us)$/.test(id) ? id : null;
   const replyAvailability = useSyncExternalStore(channel.subscribeReplyAvailability, () => channel.availabilityFor(composeId));
   const replyInset = useSyncExternalStore(channel.subscribeReplyAvailability, () => channel.insetFor(composeId));
-  const dockHeight = replyInset?.px;
   useLayoutEffect(() => {
     if (composeId === null) return;
     channel.nominateConversation(composeId);
     return () => channel.nominateConversation(null);
   }, [composeId]);
+  useLayoutEffect(() => {
+    const pane = messagePane.current;
+    if (!pane) return;
+    // Details hides the dock without retiring this nomination. Keep the list
+    // extent through the zero inset and re-open so scrollTop cannot clamp.
+    if (replyInset === null) {
+      pane.removeAttribute("data-reply-overlay");
+      pane.style.removeProperty("--waba-reply-dock-height");
+    } else if (replyInset.px > 0) {
+      pane.setAttribute("data-reply-overlay", "");
+      pane.style.setProperty("--waba-reply-dock-height", `${replyInset.px}px`);
+    }
+  }, [replyInset]);
   useLayoutEffect(() => {
     const pane = timeline.current;
     const anchor = messages.state === "ok" && messages.value.previousAnchor;
@@ -540,8 +552,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
       {workLink && work.checked.has(workLink.ref) && <span className="waba-work-state">{threadStateLabel(effectiveThreadState(record, workLink.inboundVersion), zh)}</span>}
     </header>
     <div className="waba-conversation-body">
-      <div className="waba-thread-main" ref={messagePane} data-reply-overlay={dockHeight ? "" : undefined}
-        style={dockHeight ? { "--waba-reply-dock-height": `${dockHeight}px` } as CSSProperties : undefined}>
+      <div className="waba-thread-main" ref={messagePane}>
         {replyAvailability && <div className="waba-reply-availability" role="status">
           {replyAvailability !== "verified" && <Notice state={replyAvailability}>
             {replyAvailability === "checking" ? (zh ? "正在核對收件人…" : "Verifying recipient…")
