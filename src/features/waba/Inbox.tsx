@@ -380,14 +380,6 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   useLayoutEffect(() => {
     const pane = timeline.current;
     if (!pane) return;
-    if (prependHeight.current !== null && !foregroundMessages.current) {
-      pane.scrollTop += pane.scrollHeight - prependHeight.current;
-      prependHeight.current = null;
-    } else if (keepBottom.current) pane.scrollTop = pane.scrollHeight;
-  }, [messages, details]);
-  useLayoutEffect(() => {
-    const pane = timeline.current;
-    if (!pane) return;
     const observer = new ResizeObserver(() => {
       if (keepBottom.current && prependHeight.current === null) pane.scrollTop = pane.scrollHeight;
       const last = timelineScroll.current;
@@ -471,6 +463,15 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
     return () => channel.nominateConversation(null);
   }, [composeId]);
   useLayoutEffect(() => {
+    const pane = timeline.current;
+    if (!pane) return;
+    if (prependHeight.current !== null && !foregroundMessages.current) {
+      pane.scrollTop += pane.scrollHeight - prependHeight.current;
+      prependHeight.current = null;
+    } else if (keepBottom.current && prependHeight.current === null) pane.scrollTop = pane.scrollHeight;
+    channel.acknowledgeReplyInset(replyInset);
+  }, [messages, details, replyInset]);
+  useLayoutEffect(() => {
     const pane = messagePane.current;
     if (composeId === null || !channel.hostReplyLayout || !pane) return;
     const measure = () => {
@@ -532,7 +533,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
       {workLink && work.checked.has(workLink.ref) && <span className="waba-work-state">{threadStateLabel(effectiveThreadState(record, workLink.inboundVersion), zh)}</span>}
     </header>
     <div className="waba-conversation-body">
-      <div className="waba-thread-main" ref={messagePane} style={replyInset ? { paddingBlockEnd: replyInset } : undefined}>
+      <div className="waba-thread-main" ref={messagePane} style={replyInset?.px ? { paddingBlockEnd: replyInset.px } : undefined}>
         {replyAvailability && <div className="waba-reply-availability" role="status">
           {replyAvailability !== "verified" && <Notice state={replyAvailability}>
             {replyAvailability === "checking" ? (zh ? "正在核對收件人…" : "Verifying recipient…")

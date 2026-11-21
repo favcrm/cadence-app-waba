@@ -1,7 +1,7 @@
 ---
 app: waba
 title: WhatsApp Business
-version: '0.3.12'
+version: '0.3.13'
 summary: Use the official WhatsApp Business connection or a test-only linked device for the inbox and owner-approved replies. The app holds no credentials.
 needs:
   connections: []
@@ -82,6 +82,8 @@ Those tools are not shown for linked devices. Old tool URLs open the Inbox.
   On boards that support reply layout, the dock follows the visible message
   pane and is hidden when narrow Contact details replaces it. Compatible
   overlay boards keep the message history clear of the floating composer.
+  Version 0.3.13 replaces the 0.3.12 preflight candidate and acknowledges
+  the inset only after the conversation has applied its padding.
   The Unread filter appears only when loaded conversations provide unread counts.
 - **Contact details (linked device on supported hosts).** Full phone numbers
   appear beside saved names in the list and under the chat title when the

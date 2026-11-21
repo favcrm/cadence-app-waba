@@ -15,6 +15,7 @@ function refusal(v: unknown): ApiError {
   return new ApiError(v.text, status, { code: v.code });
 }
 type ReplyAvailability = "checking" | "blocked" | "verified";
+type ReplyInset = { nomination: number; seq: number; px: number };
 class Channel {
   private port: MessagePort | null = null;
   private retired = false;
@@ -23,7 +24,8 @@ class Channel {
   private replyAvailabilitySupported = false;
   private replyLayoutSupported = false;
   private replyOverlaySupported = false;
-  private replyInset = 0;
+  private replyInset: ReplyInset | null = null;
+  private acknowledgedInset: ReplyInset | null = null;
   private lastLayout: string | null = null;
   private nomination = 0;
   private conversationId: string | null = null;
@@ -37,8 +39,15 @@ class Channel {
     if (!this.replyAvailabilitySupported || this.retired || id === null) return null;
     return id === this.conversationId ? this.replyAvailability : "checking";
   }
-  insetFor(id: string | null): number {
-    return this.replyOverlaySupported && !this.retired && id !== null && id === this.conversationId ? this.replyInset : 0;
+  insetFor(id: string | null): ReplyInset | null {
+    return this.replyOverlaySupported && !this.retired && id !== null && id === this.conversationId ? this.replyInset : null;
+  }
+  acknowledgeReplyInset(inset: ReplyInset | null): void {
+    if (!inset || !this.replyOverlaySupported || this.retired || !this.port ||
+        this.conversationId === null || inset !== this.replyInset || inset.nomination !== this.nomination ||
+        inset === this.acknowledgedInset) return;
+    this.acknowledgedInset = inset;
+    this.port.postMessage({ v: 2, op: "whatsapp-reply-inset-ready", nomination: inset.nomination, seq: inset.seq, px: inset.px });
   }
   private announceReplyAvailability(): void {
     this.replyListeners.forEach(listener => listener());
@@ -57,7 +66,8 @@ class Channel {
     this.conversationId = conversationId;
     this.nomination++;
     this.lastLayout = null;
-    this.replyInset = 0;
+    this.replyInset = null;
+    this.acknowledgedInset = null;
     this.replyAvailability = "checking";
     this.port.postMessage({ v: 2, op: "whatsapp-compose", conversation_id: conversationId });
     this.announceReplyAvailability();
@@ -82,7 +92,7 @@ class Channel {
     this.composeSupported = window.location.hash === "#cadence-whatsapp-compose-v1";
     this.replyAvailabilitySupported = this.composeSupported && new URLSearchParams(window.location.search).get("wa_compose_availability") === "1";
     this.replyLayoutSupported = this.replyAvailabilitySupported && new URLSearchParams(window.location.search).get("wa_compose_layout") === "1";
-    this.replyOverlaySupported = this.replyLayoutSupported && new URLSearchParams(window.location.search).get("wa_compose_overlay") === "1";
+    this.replyOverlaySupported = this.replyLayoutSupported && new URLSearchParams(window.location.search).get("wa_compose_inset_ack") === "1";
     pair.port1.postMessage({ v: 1, op: "ready", accepts: ["screen.v2", "screen-records.v1", "screen-locale.v1",
       ...(this.composeSupported ? ["screen-whatsapp-compose.v1"] : []),
       ...(this.replyAvailabilitySupported ? ["screen-whatsapp-reply-availability.v1"] : []),
@@ -125,11 +135,12 @@ class Channel {
       return;
     }
     if (data.op === "whatsapp-reply-inset") {
-      if (!this.replyOverlaySupported || !exact(data, ["v", "op", "nomination", "px"]) ||
+      if (!this.replyOverlaySupported || !exact(data, ["v", "op", "nomination", "seq", "px"]) ||
           typeof data.nomination !== "number" || !Number.isSafeInteger(data.nomination) || data.nomination < 1 ||
+          typeof data.seq !== "number" || !Number.isSafeInteger(data.seq) || data.seq < 1 ||
           typeof data.px !== "number" || !Number.isInteger(data.px) || data.px < 0 || data.px > 512) throw invalid();
-      if (this.conversationId !== null && data.nomination === this.nomination && data.px !== this.replyInset) {
-        this.replyInset = data.px;
+      if (this.conversationId !== null && data.nomination === this.nomination && data.seq > (this.replyInset?.seq ?? 0)) {
+        this.replyInset = { nomination: data.nomination, seq: data.seq, px: data.px };
         this.announceReplyAvailability();
       }
       return;
@@ -167,7 +178,8 @@ class Channel {
   retire(error: ApiError): void {
     if (this.retired) return;
     this.retired = true;
-    this.replyInset = 0;
+    this.replyInset = null;
+    this.acknowledgedInset = null;
     this.port?.close(); this.port = null;
     for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(error); }
     this.pending.clear(); clearScope(error.message);

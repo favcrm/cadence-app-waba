@@ -22,6 +22,7 @@ built on the host's pinned screen-ui SDK.
 - **Inbox layout and unread (`0.3.10`).** On compatible boards the reply dock follows the measured message pane, including when Contact details narrows it, and hides while narrow Contact details replaces the pane. Older boards retain their existing layout. Unread appears only when loaded conversations provide unread counts; if those counts become unavailable, the inbox returns to All.
 - **Inbox scroll (`0.3.11`).** Closing mobile Contact details keeps the latest message in view if the reader was already at the bottom. Readers browsing older history are not jumped to the latest message.
 - **Overlay composer (`0.3.12`).** Compatible boards float the existing text reply dock inside the conversation. The conversation alone clears the dock so messages and thread actions stay visible; the Inbox rail runs to the bottom. Older boards keep their existing layout.
+- **Overlay inset acknowledgement (`0.3.13`).** Replaces the 0.3.12 preflight candidate. The app acknowledges each current overlay inset only after committing conversation padding and preserving the reader's scroll position; compatible boards limit the dock to the acknowledged space.
 
 Plan: cadence CAD-1465 (`cad1465-waba-plan-20261018.md`).
 
