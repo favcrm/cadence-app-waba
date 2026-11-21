@@ -91,6 +91,20 @@
 .waba-timeline-inner:has(.waba-messages) { min-block-size: 100%; align-content: end; }
 .waba-jump { position: absolute; inset-inline-end: var(--waba-chat-inset); bottom: 0.625rem; }
 .waba-messages { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+.waba-thread-main[data-reply-overlay] { --waba-reply-clearance: calc(var(--waba-reply-dock-height) + 1.5rem); }
+.waba-thread-main[data-reply-overlay] .waba-timeline {
+  scroll-padding-block-end: var(--waba-reply-clearance);
+  scrollbar-gutter: stable;
+}
+.waba-thread-main[data-reply-overlay] .waba-messages { padding-bottom: var(--waba-reply-clearance); }
+.waba-thread-main[data-reply-overlay] .waba-jump {
+  inset-inline: 0;
+  inset-block-end: calc(var(--waba-reply-dock-height) + 0.75rem);
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+.waba-thread-main[data-reply-overlay] .waba-jump > button { border-radius: 999px; pointer-events: auto; }
 .waba-date { justify-self: center; color: var(--color-ink-400); font-size: var(--text-label); margin-block: 0.375rem; }
 .waba-message { display: grid; gap: 0.25rem; max-width: min(88%, 56ch); padding: 0.5rem 0.75rem; min-width: 0; background: var(--color-ink-800); border-radius: 0.875rem; border-end-start-radius: 0.25rem; justify-self: start; }
 .waba-message[data-direction="outbound"] { justify-self: end; border-end-start-radius: 0.875rem; border-end-end-radius: 0.25rem; background: color-mix(in srgb, var(--color-accent) 10%, var(--color-ink-800)); }
@@ -101,6 +115,8 @@
 .waba-message .waba-photo-preview { inline-size: 100%; }
 .waba-thread-footer { box-sizing: border-box; flex: none; display: grid; gap: 0.5rem; max-height: 55%; overflow: auto; min-width: 0; width: min(100%, 48rem); margin-inline: auto; padding: 0.5rem var(--waba-chat-inset) max(1rem, env(safe-area-inset-bottom)); }
 .waba-thread-footer > button { justify-self: start; }
+.waba-thread-main[data-reply-overlay] > .waba-thread-footer:empty { display: none; }
+.waba-thread-main[data-reply-overlay] > .waba-thread-footer:not(:empty) { margin-block-end: var(--waba-reply-clearance); }
 .waba-compose-box { display: grid; gap: 0.25rem; min-width: 0; border: 1px solid color-mix(in srgb, var(--color-edge) 70%, transparent); border-radius: 1.125rem; padding: 0.5rem 0.625rem 0.375rem; background: var(--color-ink-850); box-shadow: 0 3px 12px rgb(0 0 0 / 16%); }
 .waba-compose-box:focus-within { border-color: var(--color-accent); }
 .waba-compose-box textarea { display: block; box-sizing: border-box; width: 100%; min-height: 2.25rem; max-height: 8.25rem; field-sizing: content; padding: 0.25rem 0; outline: none; border: 0; background: transparent; color: inherit; resize: none; overflow: auto; }

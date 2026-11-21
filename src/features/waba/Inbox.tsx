@@ -1,5 +1,5 @@
 import { ApiError,Button,EmptyState,ErrorNotice,Field,Loading,Notice } from "@cadence/screen-ui";
-import { Fragment,useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState,useSyncExternalStore,type ReactNode } from "react";
+import { Fragment,useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState,useSyncExternalStore,type CSSProperties,type ReactNode } from "react";
 import { channel } from "../../bridge/channel";
 import { patchRoute } from "../../bridge/route";
 import { routable,useOnPush,useScope,type DisplayScope } from "../../bridge/scope";
@@ -339,7 +339,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const zh = useScope()?.presentationLocale === "zh-TW";
   const unavailablePreview = zh ? "無法顯示預覽" : "Preview unavailable";
   const [conversation, setConversation] = useState<Load<Conversation>>(() => initial?.conversationId === id ? { state: "ok", value: initial } : { state: "loading" });
-  const [messages, setMessages] = useState<Load<{ rows: Message[]; cursor: string | null; previousHeight?: number }>>({ state: "loading" });
+  const [messages, setMessages] = useState<Load<{ rows: Message[]; cursor: string | null; previousAnchor?: { row: HTMLElement; top: number } }>>({ state: "loading" });
   const [indexing, setIndexing] = useState(false);
   const messageRequest = useRef(0);
   const foregroundMessages = useRef(false);
@@ -411,9 +411,12 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
       );
       if (!got) return;
       setIndexing(false);
-      const previousHeight = after ? timeline.current?.scrollHeight : undefined;
+      // A dock resize can change the scroll extent in the same commit as an
+      // older page. Anchor a retained row, not the height including the dock.
+      const row = after ? timeline.current?.querySelector<HTMLElement>(".waba-message") : null;
+      const previousAnchor = row ? { row, top: row.offsetTop } : undefined;
       setMessages(m => m.state === "ok" && (after || quiet)
-        ? { state: "ok", value: { rows: after ? [...m.value.rows, ...got.rows.filter(n => !m.value.rows.some(o => o.id === n.id))] : [...got.rows, ...m.value.rows.filter(o => !got.rows.some(n => n.id === o.id))], cursor: quiet ? m.value.cursor : got.cursor, previousHeight } }
+        ? { state: "ok", value: { rows: after ? [...m.value.rows, ...got.rows.filter(n => !m.value.rows.some(o => o.id === n.id))] : [...got.rows, ...m.value.rows.filter(o => !got.rows.some(n => n.id === o.id))], cursor: quiet ? m.value.cursor : got.cursor, previousAnchor } }
         : { state: "ok", value: { rows: got.rows, cursor: got.cursor } });
     } catch (e) {
       if (request !== messageRequest.current) return;
@@ -457,6 +460,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
     && /^[A-Za-z0-9._:-]{1,128}@(s\.whatsapp\.net|lid|g\.us)$/.test(id) ? id : null;
   const replyAvailability = useSyncExternalStore(channel.subscribeReplyAvailability, () => channel.availabilityFor(composeId));
   const replyInset = useSyncExternalStore(channel.subscribeReplyAvailability, () => channel.insetFor(composeId));
+  const dockHeight = replyInset?.px;
   useLayoutEffect(() => {
     if (composeId === null) return;
     channel.nominateConversation(composeId);
@@ -464,8 +468,9 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   }, [composeId]);
   useLayoutEffect(() => {
     const pane = timeline.current;
-    if (pane && !keepBottom.current && messages.state === "ok" && messages.value.previousHeight !== undefined) {
-      pane.scrollTop += pane.scrollHeight - messages.value.previousHeight;
+    const anchor = messages.state === "ok" && messages.value.previousAnchor;
+    if (pane && anchor && !keepBottom.current && pane.contains(anchor.row)) {
+      pane.scrollTop += anchor.row.offsetTop - anchor.top;
     }
   }, [messages]);
   useLayoutEffect(() => {
@@ -535,7 +540,8 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
       {workLink && work.checked.has(workLink.ref) && <span className="waba-work-state">{threadStateLabel(effectiveThreadState(record, workLink.inboundVersion), zh)}</span>}
     </header>
     <div className="waba-conversation-body">
-      <div className="waba-thread-main" ref={messagePane} style={replyInset?.px ? { paddingBlockEnd: replyInset.px } : undefined}>
+      <div className="waba-thread-main" ref={messagePane} data-reply-overlay={dockHeight ? "" : undefined}
+        style={dockHeight ? { "--waba-reply-dock-height": `${dockHeight}px` } as CSSProperties : undefined}>
         {replyAvailability && <div className="waba-reply-availability" role="status">
           {replyAvailability !== "verified" && <Notice state={replyAvailability}>
             {replyAvailability === "checking" ? (zh ? "正在核對收件人…" : "Verifying recipient…")
