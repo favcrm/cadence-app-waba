@@ -115,8 +115,6 @@
 .waba-message .waba-photo-preview { inline-size: 100%; }
 .waba-thread-footer { box-sizing: border-box; flex: none; display: grid; gap: 0.5rem; max-height: 55%; overflow: auto; min-width: 0; width: min(100%, 48rem); margin-inline: auto; padding: 0.5rem var(--waba-chat-inset) max(1rem, env(safe-area-inset-bottom)); }
 .waba-thread-footer > button { justify-self: start; }
-.waba-thread-main[data-reply-overlay] > .waba-thread-footer:empty { display: none; }
-.waba-thread-main[data-reply-overlay] > .waba-thread-footer:not(:empty) { margin-block-end: var(--waba-reply-clearance); }
 .waba-compose-box { display: grid; gap: 0.25rem; min-width: 0; border: 1px solid color-mix(in srgb, var(--color-edge) 70%, transparent); border-radius: 1.125rem; padding: 0.5rem 0.625rem 0.375rem; background: var(--color-ink-850); box-shadow: 0 3px 12px rgb(0 0 0 / 16%); }
 .waba-compose-box:focus-within { border-color: var(--color-accent); }
 .waba-compose-box textarea { display: block; box-sizing: border-box; width: 100%; min-height: 2.25rem; max-height: 8.25rem; field-sizing: content; padding: 0.25rem 0; outline: none; border: 0; background: transparent; color: inherit; resize: none; overflow: auto; }

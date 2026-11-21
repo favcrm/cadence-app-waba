@@ -592,7 +592,9 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
           </div>
           {showLatest && <div className="waba-jump"><Button size="sm" onClick={jumpToLatest}>{zh ? "跳至最新訊息" : "Jump to latest"}</Button></div>}
         </div>
-        {c && <footer className="waba-thread-footer">
+        {/* The admitted linked composer is on the board. Official actions and
+            the local-composer/read-only footer stay on their existing path. */}
+        {c && composeId === null && <footer className="waba-thread-footer">
           <TakeoverBar scope={scope} id={id} handoffAt={c.handoffAt} rights={handoff} onChanged={() => { void show(); }} />
           {assist.brief && <Brief scope={scope} id={id} canOpen={assist.open} />}
           {draft && <DraftChip draft={draft} canInsert={canReply && windowOpen(c)} canDiscard={assist.discard} note={assistNote} onInsert={() => setInserted(i => ({ text: draft.text, n: (i?.n ?? 0) + 1 }))} onDiscard={() => { void discard(); }} />}
