@@ -346,6 +346,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const timeline = useRef<HTMLDivElement>(null);
   const messagePane = useRef<HTMLDivElement>(null);
   const keepBottom = useRef(true);
+  const timelineScroll = useRef({ width: 0, height: 0, top: 0 });
   const prependHeight = useRef<number | null>(null);
   const [showLatest, setShowLatest] = useState(false);
   const [details, setDetails] = useState(false);
@@ -389,6 +390,10 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
     if (!pane) return;
     const observer = new ResizeObserver(() => {
       if (keepBottom.current && prependHeight.current === null) pane.scrollTop = pane.scrollHeight;
+      const last = timelineScroll.current;
+      last.width = pane.clientWidth;
+      last.height = pane.clientHeight;
+      last.top = pane.scrollTop;
     });
     observer.observe(pane);
     return () => observer.disconnect();
@@ -540,10 +545,14 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
             e.preventDefault();
             const pane = e.currentTarget;
             pane.scrollTo({ top: e.key === "Home" ? 0 : pane.scrollHeight, behavior: "instant" });
-          }} onScroll={() => {
-            const pane = timeline.current;
-            if (!pane) return;
-            keepBottom.current = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 72;
+          }} onScroll={e => {
+            const pane = e.currentTarget, last = timelineScroll.current;
+            const top = pane.scrollTop, height = pane.clientHeight;
+            // A dock resize can clamp scrollTop and dispatch scroll before ResizeObserver.
+            // Only movement in the settled viewport changes whether the reader follows latest.
+            if (height !== last.height || pane.clientWidth !== last.width || top === last.top) return;
+            last.top = top;
+            keepBottom.current = pane.scrollHeight - top - height < 72;
             setShowLatest(!keepBottom.current);
           }}>
             <div className="waba-timeline-inner">
