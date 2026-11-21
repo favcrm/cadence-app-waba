@@ -543,8 +543,8 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
             // Native Home/End scroll animations can continue after Jump to latest.
             if (e.target !== e.currentTarget || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || (e.key !== "Home" && e.key !== "End")) return;
             e.preventDefault();
-            const pane = e.currentTarget;
-            pane.scrollTo({ top: e.key === "Home" ? 0 : pane.scrollHeight, behavior: "instant" });
+            if (e.key === "End") jumpToLatest();
+            else e.currentTarget.scrollTo({ top: 0, behavior: "instant" });
           }} onScroll={e => {
             const pane = e.currentTarget, last = timelineScroll.current;
             const top = pane.scrollTop, height = pane.clientHeight;
