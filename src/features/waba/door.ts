@@ -15,7 +15,32 @@ export interface ConversationRow {
   work: WorkLink | null;
 }
 export interface Conversation extends ConversationRow { status: string | null; lastInboundAt: string | null; handoffAt: string | null }
-export interface Message { id: string; direction: string | null; body: string | null; status: string | null; senderType: string | null; createdAt: string | null; type: string | null; previewJpeg: string | null }
+export type LinkedMediaKind = "image" | "video" | "audio" | "document";
+export type LinkedMediaUnavailableReason = "too_large" | "unsupported_type" | "missing_locator";
+export interface LinkedMediaInfo {
+  kind: LinkedMediaKind;
+  mimeType: string;
+  fileName: string | null;
+  byteLength: number | null;
+  width: number | null;
+  height: number | null;
+  durationSeconds: number | null;
+  ptt: boolean;
+  caption: string | null;
+  available: boolean;
+  unavailableReason: LinkedMediaUnavailableReason | null;
+}
+export interface Message {
+  id: string;
+  direction: string | null;
+  body: string | null;
+  status: string | null;
+  senderType: string | null;
+  createdAt: string | null;
+  type: string | null;
+  previewJpeg: string | null;
+  media: LinkedMediaInfo | null;
+}
 export interface Page<T> { rows: T[]; cursor: string | null }
 /** The host's reply states; anything else reads as uncertain. */
 export type ReplyState = "sent" | "accepted" | "pending" | "failed" | "refused" | "uncertain";
@@ -75,12 +100,79 @@ function previewJpeg(value: unknown): string | null {
   return typeof value === "string" && value.length <= 21_848 && value.length % 4 === 0 &&
     value.startsWith("/9j/") && /^[A-Za-z0-9+/]+={0,2}$/.test(value) ? value : null;
 }
+function noControl(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code < 32 || code === 127) return false;
+  }
+  return true;
+}
+function mediaFileName(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string" || value.length === 0 || value.length > 200 || !noControl(value)) return null;
+  if (value === "." || value === ".." || value.includes("/") || value.includes("\\")) return null;
+  return value;
+}
+function boundedInt(value: unknown, min: number, max: number): number | null {
+  if (value === null || value === undefined) return null;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max ? value : null;
+}
+export function parseMediaInfo(value: unknown): LinkedMediaInfo | null {
+  if (!obj(value)) return null;
+  const kind = value.kind;
+  if (kind !== "image" && kind !== "video" && kind !== "audio" && kind !== "document") return null;
+  if (typeof value.mimeType !== "string" || value.mimeType.length === 0 || value.mimeType.length > 200 || !noControl(value.mimeType)) return null;
+  if (typeof value.ptt !== "boolean" || typeof value.available !== "boolean") return null;
+  if (value.fileName !== null && value.fileName !== undefined && mediaFileName(value.fileName) === null) return null;
+  if (value.byteLength !== null && value.byteLength !== undefined && boundedInt(value.byteLength, 0, 2_000_000_000) === null) return null;
+  if (value.width !== null && value.width !== undefined && boundedInt(value.width, 1, 65535) === null) return null;
+  if (value.height !== null && value.height !== undefined && boundedInt(value.height, 1, 65535) === null) return null;
+  if (value.durationSeconds !== null && value.durationSeconds !== undefined && boundedInt(value.durationSeconds, 0, 86400) === null) return null;
+  if (value.caption !== null && value.caption !== undefined && (typeof value.caption !== "string" || value.caption.length > 8192)) return null;
+  const reason = value.unavailableReason;
+  if (value.available) {
+    if (reason !== null && reason !== undefined) return null;
+  } else if (reason !== "too_large" && reason !== "unsupported_type" && reason !== "missing_locator") {
+    return null;
+  }
+  const caption = typeof value.caption === "string" && value.caption.trim() !== "" ? value.caption : null;
+  return {
+    kind,
+    mimeType: value.mimeType,
+    fileName: mediaFileName(value.fileName),
+    byteLength: boundedInt(value.byteLength, 0, 2_000_000_000),
+    width: boundedInt(value.width, 1, 65535),
+    height: boundedInt(value.height, 1, 65535),
+    durationSeconds: boundedInt(value.durationSeconds, 0, 86400),
+    ptt: kind === "audio" && value.ptt,
+    caption,
+    available: value.available,
+    unavailableReason: value.available ? null : (reason as LinkedMediaUnavailableReason),
+  };
+}
+export function formatMediaBytes(bytes: number | null): string | null {
+  if (bytes === null || !Number.isFinite(bytes) || bytes < 0) return null;
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) {
+    const kb = bytes / 1024;
+    return `${kb % 1 === 0 ? kb.toFixed(0) : kb.toFixed(1)} KB`;
+  }
+  const mb = bytes / (1024 * 1024);
+  return `${mb % 1 === 0 ? mb.toFixed(0) : mb.toFixed(1)} MB`;
+}
+export function formatMediaDuration(seconds: number | null): string | null {
+  if (seconds === null || !Number.isFinite(seconds) || seconds < 0) return null;
+  const total = Math.floor(seconds);
+  const mins = Math.floor(total / 60);
+  const secs = total % 60;
+  return `${mins}:${String(secs).padStart(2, "0")}`;
+}
 export function parseMessages(v: unknown): Page<Message> {
   const d = door(v);
   if (!Array.isArray(d.messages)) bad();
   return { rows: d.messages.map(m => {
     if (!obj(m) || !str(m.id)) bad();
-    return { id: m.id as string, direction: str(m.direction), body: str(m.body), status: str(m.status), senderType: str(m.senderType), createdAt: str(m.createdAt), type: str(m.type), previewJpeg: previewJpeg(m.previewJpeg) };
+    return { id: m.id as string, direction: str(m.direction), body: str(m.body), status: str(m.status), senderType: str(m.senderType), createdAt: str(m.createdAt), type: str(m.type), previewJpeg: previewJpeg(m.previewJpeg), media: parseMediaInfo(m.media) };
   }), cursor: str(d.cursor) };
 }
 export function parsePrepared(v: unknown): Prepared {
@@ -131,6 +223,15 @@ const REFUSALS: Record<string, string> = {
   favcrm_not_bound: "This workspace is not connected to FavCRM. Connect it, then try again.",
   not_granted: "Linked-device access is not enabled. Ask a platform administrator to grant access.",
   conversation_not_found: "FavCRM could not find this conversation. Refresh the Inbox.",
+  expired_on_provider: "WhatsApp no longer retains this media.",
+  device_offline: "Linked WhatsApp device is offline. Reconnect in Settings and try again.",
+  too_large: "This attachment exceeds the 10 MB display/download limit.",
+  unsupported_type: "This media format is not supported.",
+  missing_locator: "Media metadata is unavailable for this message.",
+  busy: "Too many downloads are in progress. Try again in a moment.",
+  media_unavailable: "This media attachment is unavailable.",
+  download_failed: "Couldn't download this attachment. Try again.",
+  timeout: "Media download timed out. Try again.",
 };
 export function errorText(error: unknown, fallback: string): string {
   const code = error instanceof ApiError ? (error as ApiError & { code?: unknown }).code : undefined;

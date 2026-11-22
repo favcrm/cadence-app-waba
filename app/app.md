@@ -1,7 +1,7 @@
 ---
 app: waba
 title: WhatsApp Business
-version: '0.3.17'
+version: '0.3.18'
 summary: Use the official WhatsApp Business connection or a test-only linked device for the inbox and owner-approved replies. The app holds no credentials.
 needs:
   connections: []
@@ -74,7 +74,9 @@ Those tools are not shown for linked devices. Old tool URLs open the Inbox.
   cannot be sent. A linked-device reply is accepted only when the exact
   WhatsApp server ACK is recorded; acceptance does not confirm delivery.
   Never retry an uncertain send automatically.
-  Replies are text only; inbound photo previews do not support uploads.
+  On a compatible host, linked-device threads support viewing full inbound
+  images, playing voice notes/audio and video inline, saving inbound documents
+  and media, and attaching media from the board reply composer.
   On a compatible host, an owner replying in an existing linked-device thread
   types in the board composer and presses Send or Enter once; Shift+Enter adds
   a line. The board confirms the exact recipient and edited text before sending.
