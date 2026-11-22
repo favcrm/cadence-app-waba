@@ -78,7 +78,7 @@ export const SLOT_FIELDS: Record<keyof SlotArgs, readonly string[]> = {
   "whatsapp.handoff.release": ["conversation_id"],
 };
 export const OPERATIONS = [...Object.keys(CALL_FIELDS), ...Object.keys(SLOT_FIELDS)];
-const LINKED_CALLS = new Set(["whatsapp.status", "whatsapp.connect_session", "whatsapp.conversations.list", "whatsapp.conversations.show", "whatsapp.messages", "whatsapp.reply.prepare", "whatsapp.reply.status"]);
+const LINKED_CALLS = new Set(["whatsapp.status", "whatsapp.connect_session", "whatsapp.conversations.list", "whatsapp.conversations.show", "whatsapp.messages", "whatsapp.reply.prepare", "whatsapp.reply.status", "whatsapp.draft.show", "whatsapp.draft.discard"]);
 const LINKED_SLOTS = new Set(["whatsapp.reply.send"]);
 function providerArgs(scope: DisplayScope, verb: string, args: Bag, slot: boolean): Bag {
   const clean = cleanArgs(verb, args, slot);

@@ -885,10 +885,24 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
         </div>
         {/* The admitted linked composer is on the board. Official actions and
             the local-composer/read-only footer stay on their existing path. */}
+        {c && composeId !== null && draft && <div className="waba-draft-dock">
+          <DraftChip
+            draft={draft}
+            zh={zh}
+            canInsert={false}
+            canDiscard={assist.discard}
+            note={assistNote}
+            onInsert={() => {}}
+            onCopy={typeof navigator !== "undefined" && typeof navigator.clipboard?.writeText === "function"
+              ? () => navigator.clipboard.writeText(draft.text)
+              : undefined}
+            onDiscard={() => { void discard(); }}
+          />
+        </div>}
         {c && composeId === null && <footer className="waba-thread-footer">
           <TakeoverBar scope={scope} id={id} handoffAt={c.handoffAt} rights={handoff} onChanged={() => { void show(); }} />
           {assist.brief && <Brief scope={scope} id={id} canOpen={assist.open} />}
-          {draft && <DraftChip draft={draft} canInsert={canReply && windowOpen(c)} canDiscard={assist.discard} note={assistNote} onInsert={() => setInserted(i => ({ text: draft.text, n: (i?.n ?? 0) + 1 }))} onDiscard={() => { void discard(); }} />}
+          {draft && <DraftChip draft={draft} zh={zh} canInsert={canReply && (linked || windowOpen(c))} canDiscard={assist.discard} note={assistNote} onInsert={() => setInserted(i => ({ text: draft.text, n: (i?.n ?? 0) + 1 }))} onDiscard={() => { void discard(); }} />}
           {canReply ? !(linked && channel.hostCompose) && <Composer scope={scope} conversationId={c.conversationId} handoffAt={c.handoffAt} freeformUntil={c.freeformUntil} open={scope.provider === "linked" || windowOpen(c)} autoTakeover={handoff.set} inserted={inserted} onSent={onSent} onChanged={reload} onDirtyChange={onReplyDirty} />
             : <Notice state="read-only">You can read this inbox. Only the workspace operator can reply.</Notice>}
           {canTemplate && <Button size="sm" disabled={replyDirty} onClick={() => onRecipient(c)}>{zh ? "使用已核准的範本…" : "Send an approved template…"}</Button>}
@@ -1302,13 +1316,39 @@ function Brief({ scope, id, canOpen }: { scope: DisplayScope; id: string; canOpe
   </div>;
 }
 
-function DraftChip({ draft, canInsert, canDiscard, note, onInsert, onDiscard }: { draft: Draft; canInsert: boolean; canDiscard: boolean; note: string | null; onInsert: () => void; onDiscard: () => void }) {
+function DraftChip({ draft, zh, canInsert, canDiscard, note, onInsert, onCopy, onDiscard }: {
+  draft: Draft;
+  zh: boolean;
+  canInsert: boolean;
+  canDiscard: boolean;
+  note: string | null;
+  onInsert: () => void;
+  onCopy?: () => Promise<void> | void;
+  onDiscard: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (copyTimer.current !== null) clearTimeout(copyTimer.current); }, []);
+  useEffect(() => { setCopied(false); }, [draft.draftId, draft.text]);
+  async function copy() {
+    if (!onCopy) return;
+    try {
+      await onCopy();
+      setCopied(true);
+      if (copyTimer.current !== null) clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => { setCopied(false); copyTimer.current = null; }, 2000);
+    } catch {
+      setCopied(false);
+    }
+  }
+  const showCopy = !canInsert && !!onCopy;
   return <Notice state="assistant-draft">
-    <strong>Assistant draft</strong>
+    <strong>{zh ? "助理草稿" : "Assistant draft"}</strong>
     <blockquote className="waba-quote">{draft.text}</blockquote>
-    {(canInsert || canDiscard) && <div className="waba-head">
-      {canInsert && <Button size="sm" onClick={onInsert}>Insert</Button>}
-      {canDiscard && <Button size="sm" variant="ghost" onClick={onDiscard}>Discard</Button>}
+    {(canInsert || showCopy || canDiscard) && <div className="waba-head">
+      {canInsert && <Button size="sm" onClick={onInsert}>{zh ? "插入" : "Insert"}</Button>}
+      {showCopy && <Button size="sm" onClick={() => { void copy(); }}>{copied ? (zh ? "已複製" : "Copied") : (zh ? "複製" : "Copy")}</Button>}
+      {canDiscard && <Button size="sm" variant="ghost" onClick={onDiscard}>{zh ? "捨棄" : "Discard"}</Button>}
     </div>}
     {note && <p className="waba-muted" role="alert">{note}</p>}
   </Notice>;

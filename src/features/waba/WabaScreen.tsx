@@ -144,10 +144,12 @@ export default function WabaScreen() {
   const viewer = { canConnect: can("whatsapp.connect_session"), canReply: can("whatsapp.reply.prepare", "whatsapp.reply.send"), canTemplate: !linked && can("whatsapp.template.prepare", "whatsapp.template.send") };
   const rights = { draft: can("whatsapp.broadcast.draft"), estimate: can("whatsapp.broadcast.estimate"), test: can("whatsapp.broadcast.test.prepare", "whatsapp.broadcast.test.send"), send: can("whatsapp.broadcast.prepare", "whatsapp.broadcast.send"), stop: can("whatsapp.broadcast.stop") };
   const mode = saved?.profile.reply_mode ?? "copilot";
-  // The copilot is offered only in copilot mode and only where the host granted its reads.
-  const copilot = !linked && mode === "copilot" && can("whatsapp.draft.show");
+  // Parked assistant drafts apply to both Official and Linked inboxes when copilot mode is active;
+  // chat brief/open and handoff controls remain Official-only.
+  const showDrafts = mode === "copilot" && can("whatsapp.draft.show");
+  const copilot = !linked && showDrafts;
   const handoff = { set: !linked && can("whatsapp.handoff.set"), release: !linked && can("whatsapp.handoff.release") };
-  const assist = { show: copilot, brief: copilot && can("chat.whatsapp.brief"), open: copilot && can("chat.whatsapp.open"), discard: copilot && can("whatsapp.draft.discard") };
+  const assist = { show: showDrafts, brief: copilot && can("chat.whatsapp.brief"), open: copilot && can("chat.whatsapp.open"), discard: showDrafts && can("whatsapp.draft.discard") };
   const settings = route.section === "connection";
   const chosen = pick ?? provider;
   const saveNotice = saveError === "owner"
