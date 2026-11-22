@@ -1,4 +1,4 @@
-import { ApiError,Button,EmptyState,ErrorNotice,Field,Loading,Notice } from "@cadence/screen-ui";
+import { ApiError,Button,EmptyState,ErrorNotice,Field,Loading,Notice,Select,type SelectOption } from "@cadence/screen-ui";
 import { Fragment,useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState,useSyncExternalStore,type ReactNode,type RefObject } from "react";
 import { channel } from "../../bridge/channel";
 import { patchRoute } from "../../bridge/route";
@@ -43,8 +43,32 @@ function RowIdentity({ name, phone }: { name: string; phone: string | null }) {
   </span>;
 }
 
-function Avatar({ name }: { name: string }) {
-  return <span className="waba-avatar" aria-hidden="true">{Array.from(name.trim()).slice(0, 2).join("").toLocaleUpperCase()}</span>;
+function Avatar({ name, phone, group }: { name: string; phone?: string | null; group?: boolean }) {
+  if (group) {
+    return <span className="waba-avatar" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="9.2" cy="9" r="2.8" />
+        <path d="M4 18.5a5.2 5.2 0 0 1 10.4 0" />
+        <circle cx="16.5" cy="9.5" r="2.3" />
+        <path d="M16 14.2a4.3 4.3 0 0 1 4.2 4.3" />
+      </svg>
+    </span>;
+  }
+  const trimmed = name.trim();
+  const isGeneric = !trimmed || trimmed === phone || ["Phone not available", "未有電話號碼", "Unknown contact", "未知聯絡人", "WhatsApp group", "WhatsApp 群組"].includes(trimmed) || trimmed.startsWith("+");
+  if (isGeneric) {
+    return <span className="waba-avatar" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="8.5" r="3.6" />
+        <path d="M5.5 19.5a6.5 6.5 0 0 1 13 0" />
+      </svg>
+    </span>;
+  }
+  const parts = trimmed.split(/\s+/).filter(Boolean);
+  const chars = parts.length >= 2
+    ? `${Array.from(parts[0]!)[0] ?? ""}${Array.from(parts[1]!)[0] ?? ""}`
+    : Array.from(trimmed).slice(0, 2).join("");
+  return <span className="waba-avatar" aria-hidden="true">{chars.toLocaleUpperCase()}</span>;
 }
 
 const dayFormat = { en: new Intl.DateTimeFormat("en", { dateStyle: "medium" }), zh: new Intl.DateTimeFormat("zh-TW", { dateStyle: "medium" }) };
@@ -73,7 +97,7 @@ async function readWhileIndexing<T>(
 }
 
 type Queue = "all" | "unread" | ThreadState | "due";
-const workQueues = ["needs_reply", "waiting", "done", "due"] as const;
+const allQueues: readonly Queue[] = ["all", "unread", "needs_reply", "due", "waiting", "done"];
 type WorkIndex = { records: Map<string, ThreadWork>; checked: Set<string> };
 const emptyWorkIndex = (): WorkIndex => ({ records: new Map(), checked: new Set() });
 function calendarDay(now: Date) {
@@ -221,6 +245,41 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
     }
     return !pageByRef.has(r.ref) && !!r.name?.toLocaleLowerCase().includes(needle);
   }) ?? [];
+  const queueStats = useMemo(() => {
+    let needsReply = 0, waiting = 0, done = 0, dueLoaded = 0;
+    for (const r of rows) {
+      if (!r.work || !work.checked.has(r.work.ref)) continue;
+      const record = work.records.get(r.work.ref);
+      const state = effectiveThreadState(record, r.work.inboundVersion);
+      if (state === "needs_reply") needsReply += 1;
+      else if (state === "waiting") waiting += 1;
+      else if (state === "done") done += 1;
+      if (record?.due && record.due <= dueDay) dueLoaded += 1;
+    }
+    const dueExact = queue === "due" && browse.page?.state === "ok"
+      ? (browse.page.cursor ? `${extras.length}+` : String(extras.length))
+      : dueLoaded > 0 ? String(dueLoaded) : undefined;
+    return { needsReply, waiting, done, dueBadge: dueExact };
+  }, [rows, work, dueDay, queue, browse.page, extras.length]);
+  const queueOptions = useMemo<SelectOption[]>(() => {
+    const inboxGroup = inboxScope ? (zh ? "收件匣" : "Inbox") : undefined;
+    const workGroup = zh ? "跟進及狀態" : "Follow-up & status";
+    const opts: SelectOption[] = [
+      { value: "all", label: zh ? "全部對話" : "All chats", ...(rows.length > 0 ? { badge: String(rows.length) } : {}), ...(inboxGroup ? { group: inboxGroup } : {}) },
+      ...(canFilterUnread ? [{ value: "unread", label: zh ? "未讀" : "Unread", ...(unreadCount > 0 ? { badge: String(unreadCount) } : {}), ...(inboxGroup ? { group: inboxGroup } : {}) }] : []),
+    ];
+    if (inboxScope) {
+      opts.push(
+        { value: "needs_reply", label: threadStateLabel("needs_reply", zh), ...(queueStats.needsReply > 0 ? { badge: String(queueStats.needsReply) } : {}), group: workGroup },
+        { value: "due", label: zh ? "待跟進" : "Follow-ups due", ...(queueStats.dueBadge ? { badge: queueStats.dueBadge } : {}), group: workGroup },
+        { value: "waiting", label: threadStateLabel("waiting", zh), ...(queueStats.waiting > 0 ? { badge: String(queueStats.waiting) } : {}), group: workGroup },
+        { value: "done", label: threadStateLabel("done", zh), ...(queueStats.done > 0 ? { badge: String(queueStats.done) } : {}), group: workGroup },
+      );
+    }
+    return opts;
+  }, [inboxScope, zh, rows.length, canFilterUnread, unreadCount, queueStats]);
+  const activeQueueLabel = queueOptions.find(o => o.value === queue)?.label ?? (zh ? "全部對話" : "All chats");
+  const visibleCount = queue === "due" ? extras.length : shown.length + extras.length;
   const failed = list === "failed";
   const browseLabel = queue === "due" ? (zh ? "查找跟進事項…" : "Finding follow-ups…") : (zh ? "搜尋已儲存名稱…" : "Searching saved names…");
   return <section className="waba-page waba-inbox" data-selected={newMessage || selected ? "yes" : "no"} aria-label={zh ? "收件匣" : "Inbox"}>
@@ -233,20 +292,22 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
         </div>
         <input className="field waba-search" type="search" aria-label={zh ? "搜尋對話" : "Search conversations"} placeholder={zh ? "搜尋對話…" : "Search conversations…"} value={filter} onChange={e => setFilter(e.target.value)} />
         {(canFilterUnread || inboxScope) && <div className="waba-list-filters" role="group" aria-label={zh ? "篩選對話" : "Filter conversations"}>
-          <button type="button" aria-pressed={queue === "all"} onClick={() => setQueue("all")}>{zh ? "全部" : "All"}</button>
-          {canFilterUnread && <button type="button" aria-pressed={queue === "unread"} onClick={() => setQueue("unread")}>
-            {zh ? "未讀" : "Unread"}{unreadCount > 0 && <span className="waba-unread-count">{unreadCount}</span>}
+          <Select className="waba-queue-select" size="sm" full value={queue} options={queueOptions} aria-label={zh ? "選擇對話佇列" : "Filter conversation queue"} onChange={next => {
+            const matched = allQueues.find(value => value === next);
+            setQueue(matched ?? "all");
+          }} />
+          {inboxScope && <button type="button" className="waba-due-toggle" aria-pressed={queue === "due"} onClick={() => setQueue(queue === "due" ? "all" : "due")}>
+            <span className="waba-due-dot" aria-hidden="true" />
+            <span>{zh ? "待跟進" : "Due"}</span>
+            {queueStats.dueBadge && <span className="waba-due-count">{queueStats.dueBadge}</span>}
           </button>}
-          {inboxScope && <select className="field waba-queue" aria-label={zh ? "按跟進狀態篩選" : "Filter by follow-up"} value={queue === "all" || queue === "unread" ? "" : queue} onChange={e => {
-            const next = workQueues.find(value => value === e.currentTarget.value);
-            setQueue(next ?? "all");
-          }}>
-            <option value="">{zh ? "跟進" : "Follow-up"}</option>
-            {workQueues.map(value => <option key={value} value={value}>{value === "due" ? (zh ? "待跟進" : "Follow-ups due") : threadStateLabel(value, zh)}</option>)}
-          </select>}
         </div>}
       </header>
       <div className="waba-list-scroll">
+      {queue !== "all" && list === "ok" && <div className="waba-active-filter">
+        <span>{zh ? `顯示 ${visibleCount} 項 · ${activeQueueLabel}` : `Showing ${visibleCount} · ${activeQueueLabel}`}</span>
+        <button type="button" className="waba-active-reset" onClick={() => setQueue("all")}>{zh ? "重設" : "Reset"}</button>
+      </div>}
       {workError && queue !== "due" && <ErrorNotice bare onRetry={() => { void page(null, true); }}>{zh ? "無法載入跟進狀態。" : "Couldn’t refresh conversation work."}</ErrorNotice>}
       {openError && <ErrorNotice bare>{zh ? "無法開啟對話。請檢查已連結帳戶。" : "Couldn’t open that conversation. Check the linked account."}</ErrorNotice>}
       {browse.page?.state === "failed" && <ErrorNotice bare onRetry={() => { void browse.load(browse.page?.cursor); }}>{zh ? "無法讀取搜尋結果。" : "Couldn’t read those results."}</ErrorNotice>}
@@ -266,29 +327,36 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
         : <ul className="waba-rows">{shown.map(r => {
           const phone = contactPhone(r, linked);
           const record = recordFor(r);
+          const groupRow = linked && r.conversationId.endsWith("@g.us");
           const name = contactName(r, phone, linked, zh, record?.name), at = stamp(r.lastMessage?.createdAt ?? null);
           const state = r.work && work.checked.has(r.work.ref) ? effectiveThreadState(record, r.work.inboundVersion) : null;
-          const flag = record?.due && record.due <= dueDay ? dueLabel(record.due, dueDay, zh)
+          const isDue = !!record?.due && record.due <= dueDay;
+          const flag = isDue ? dueLabel(record!.due!, dueDay, zh)
             : state && state !== "needs_reply" ? threadStateLabel(state, zh) : null;
+          const flagTone = isDue ? (record!.due! < dueDay ? "overdue" : "due") : state === "done" ? "done" : "waiting";
           const unread = r.unreadCount ?? 0;
+          const lastText = r.lastMessage
+            ? `${r.lastMessage.direction === "outbound" ? (zh ? "你：" : "You: ") : ""}${r.lastMessage.body ?? (zh ? "媒體附件" : "Attachment")}`
+            : "";
           return <li key={r.conversationId}>
             <button type="button" className="waba-row" disabled={replyDirty || opening} aria-current={r.conversationId === selected ? "true" : undefined} data-unread={unread > 0 ? "yes" : undefined} onClick={e => { openRow.current = e.currentTarget; select(r.conversationId); }}>
-              <Avatar name={name} />
+              <Avatar name={name} phone={phone} group={groupRow} />
               <RowIdentity name={name} phone={linked ? phone : null} />
               {at === null ? <span /> : <time className="waba-row-time" dateTime={r.lastMessage?.createdAt ?? undefined}>{dayFormat[locale].format(at) === today ? timeFormat[locale].format(at) : listDate[locale].format(at)}</time>}
-              <span className="waba-row-last">{r.lastMessage?.direction === "outbound" ? (zh ? "你：" : "You: ") : ""}{r.lastMessage?.body ?? ""}</span>
+              <span className="waba-row-last">{lastText}</span>
               {unread > 0 && <span className="waba-badge" aria-label={zh ? `${unread} 則未讀訊息` : `${unread} unread`}>{unread > 99 ? "99+" : unread}</span>}
-              {flag && <span className="waba-row-flag">{flag}</span>}
+              {flag && <span className="waba-row-flag" data-tone={flagTone}>{flag}</span>}
             </button>
           </li>;
         })}{extras.map(record => {
           const known = pageByRef.get(record.ref) ?? (resolved?.work?.ref === record.ref ? resolved : null);
           const phone = known ? contactPhone(known, linked) : null;
+          const groupRow = !!known && linked && known.conversationId.endsWith("@g.us");
           const name = known ? contactName(known, phone, linked, zh, record.name) : record.name ?? (zh ? "較早對話" : "Earlier conversation");
           return <li key={record.ref}>
             <button type="button" className="waba-row" aria-disabled={opening || undefined} disabled={replyDirty} aria-current={selected && (known?.conversationId === selected || resolved?.work?.ref === record.ref) ? "true" : undefined}
               onClick={e => { remember(record); void openWork(record.ref, e.currentTarget); }}>
-              <Avatar name={name} />
+              <Avatar name={name} phone={phone} group={groupRow} />
               <RowIdentity name={name} phone={phone} />
               <span />
               <span className="waba-row-last">{record.due ? `${dueLabel(record.due, dueDay, zh)} · ${record.due}` : (zh ? "已儲存的對話名稱" : "Saved conversation name")}</span>
@@ -594,12 +662,18 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
       <Button size="sm" variant="ghost" className="waba-back" disabled={replyDirty} onClick={onBack}>{zh ? "返回" : "Back"}</Button>
       <h2 id="waba-thread-title" tabIndex={-1}>
         {c ? <button className="waba-details-trigger" ref={detailsButton} type="button" aria-expanded={details} aria-controls="waba-contact-details" aria-label={`${identity}${zh ? "：" : ": "}${detailsLabel}`} onClick={() => details ? closeDetails() : setDetails(true)}>
-          <Avatar name={title} />
+          <Avatar name={title} phone={phone} group={group} />
           <span className="waba-thread-identity">{title === phone ? <bdi dir="ltr">{phone}</bdi> : title}{subtitle !== title && <small className="waba-muted">{phone ? <bdi dir="ltr">{phone}</bdi> : subtitle}</small>}</span>
           <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M7.5 3v10m-4-10h9A1.5 1.5 0 0 1 14 4.5v7a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5v-7A1.5 1.5 0 0 1 3.5 3Z" /></svg>
         </button> : title}
       </h2>
-      {workLink && work.checked.has(workLink.ref) && <span className="waba-work-state">{threadStateLabel(effectiveThreadState(record, workLink.inboundVersion), zh)}</span>}
+      {workLink && work.checked.has(workLink.ref) && (() => {
+        const currentState = effectiveThreadState(record, workLink.inboundVersion);
+        return <button type="button" className="waba-work-pill" data-state={currentState} aria-expanded={details} onClick={() => details ? closeDetails() : setDetails(true)}>
+          <span className="waba-work-dot" aria-hidden="true" />
+          <span>{threadStateLabel(currentState, zh)}</span>
+        </button>;
+      })()}
     </header>
     <div className="waba-conversation-body">
       <div className="waba-thread-main" ref={messagePane}>
@@ -678,7 +752,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
       </div>
       {c && <aside id="waba-contact-details" className="waba-contact-details" aria-labelledby="waba-contact-title" hidden={!details}>
         <header className="waba-head"><h3 id="waba-contact-title">{group ? (zh ? "群組詳情" : "Group details") : (zh ? "聯絡人詳情" : "Contact details")}</h3><button className="btn" type="button" ref={closeDetailsButton} disabled={workDirty} onClick={closeDetails}>{zh ? "關閉" : "Close"}</button></header>
-        <div className="waba-contact-profile"><Avatar name={title} /><strong>{title}</strong></div>
+        <div className="waba-contact-profile"><Avatar name={title} phone={phone} group={group} /><strong>{title}</strong></div>
         <dl className="waba-contact-facts">
           {group ? <div><dt>{zh ? "類型" : "Type"}</dt><dd>{subtitle}</dd></div> : <div><dt>{zh ? "電話" : "Phone"}</dt>
             <dd>{phone ? <bdi dir="ltr">{phone}</bdi> : <span className="waba-muted">{phoneUnavailable(zh)}</span>}</dd></div>}
