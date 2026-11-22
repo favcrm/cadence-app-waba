@@ -1,7 +1,7 @@
 ---
 app: waba
 title: WhatsApp Business
-version: '0.3.19'
+version: '0.3.20'
 summary: Use the official WhatsApp Business connection or a test-only linked device for the inbox and owner-approved replies. The app holds no credentials.
 needs:
   connections: []
@@ -90,8 +90,10 @@ Those tools are not shown for linked devices. Old tool URLs open the Inbox.
 - **Contact details (linked device on supported hosts).** Full phone numbers
   appear beside saved names in the list and under the chat title when the
   paired account knows them. A group or an opaque ID is not a phone number.
-  Owners can save a shared name, add a private note, choose Needs reply, Waiting
-  or Done, and set a follow-up date. Use Search to find saved names and
+  Contact details open in a read-only slide-over drawer (`DrawerShell` +
+  `Detail`) so assistant-updated shared names, statuses, follow-up dates,
+  internal notes and shared media remain clean to scan, with optional manual
+  Edit and Add note actions when needed. Use Search to find saved names and
   **Follow-ups due** to find reminders, including older conversations.
   New inbound messages reopen a waiting or done conversation when the
   inbox reads them. Follow-ups do not send messages. No CRM is required.

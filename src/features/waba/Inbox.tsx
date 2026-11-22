@@ -4,8 +4,8 @@ import { channel } from "../../bridge/channel";
 import { patchRoute } from "../../bridge/route";
 import { routable,useOnPush,useScope,type DisplayScope } from "../../bridge/scope";
 import { serviceCall,serviceSlot } from "../../bridge/services";
-import ContactWork,{ threadStateLabel } from "./ContactWork";
-import { effectiveThreadState,listThreadWork,validWorkRef,type ThreadState,type ThreadWork } from "./inboxWork";
+import ContactDrawer,{ threadStateLabel } from "./ContactDrawer";
+import { dueLabel,effectiveThreadState,listThreadWork,validWorkRef,type ThreadState,type ThreadWork } from "./inboxWork";
 import { useWorkBrowse } from "./useWorkBrowse";
 import type { Recipient } from "./Templates";
 import { declinedReason,errorText,formatMediaBytes,formatMediaDuration,parseConversation,parseConversations,parseDraft,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Draft,type LinkedMediaInfo,type Message,type ReplyState,type ReplyStatus } from "./door";
@@ -102,9 +102,6 @@ type WorkIndex = { records: Map<string, ThreadWork>; checked: Set<string> };
 const emptyWorkIndex = (): WorkIndex => ({ records: new Map(), checked: new Set() });
 function calendarDay(now: Date) {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-}
-function dueLabel(date: string, today: string, zh: boolean) {
-  return date === today ? (zh ? "今日跟進" : "Due today") : date < today ? (zh ? "跟進逾期" : "Overdue") : `${zh ? "跟進" : "Follow up"} ${date}`;
 }
 
 export default function Inbox({ scope, canReply, canTemplate, assist, handoff, routeId: routed, initialId, onRecipient, replyDirty, onDirtyChange, openSettings, tools }: { scope: DisplayScope; canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; routeId: string | null; initialId: string | null; onRecipient: (r: Recipient) => void; replyDirty: boolean; onDirtyChange: (dirty: boolean) => void; openSettings: () => Promise<unknown>; tools: ReactNode }) {
@@ -309,6 +306,7 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
         <button type="button" className="waba-active-reset" onClick={() => setQueue("all")}>{zh ? "重設" : "Reset"}</button>
       </div>}
       {workError && queue !== "due" && <ErrorNotice bare onRetry={() => { void page(null, true); }}>{zh ? "無法載入跟進狀態。" : "Couldn’t refresh conversation work."}</ErrorNotice>}
+      {opening && <Loading>{zh ? "正在開啟對話…" : "Opening conversation…"}</Loading>}
       {openError && <ErrorNotice bare>{zh ? "無法開啟對話。請檢查已連結帳戶。" : "Couldn’t open that conversation. Check the linked account."}</ErrorNotice>}
       {browse.page?.state === "failed" && <ErrorNotice bare onRetry={() => { void browse.load(browse.page?.cursor); }}>{zh ? "無法讀取搜尋結果。" : "Couldn’t read those results."}</ErrorNotice>}
       {list === "indexing" && rows.length > 0 && <p className="waba-muted" role="status">{zh ? "正在整理較早的對話…" : "Indexing older conversations…"}</p>}
@@ -409,6 +407,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const [conversation, setConversation] = useState<Load<Conversation>>(() => initial?.conversationId === id ? { state: "ok", value: initial } : { state: "loading" });
   const [messages, setMessages] = useState<Load<{ rows: Message[]; cursor: string | null; previousAnchor?: { row: HTMLElement; top: number } }>>({ state: "loading" });
   const [indexing, setIndexing] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const messageRequest = useRef(0);
   const foregroundMessages = useRef(false);
   const timeline = useRef<HTMLDivElement>(null);
@@ -418,18 +417,16 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const [showLatest, setShowLatest] = useState(false);
   const [details, setDetails] = useState(false);
   const replyEdited = useRef(false), workEdited = useRef(false);
-  const [workDirty, setWorkDirty] = useState(false);
   const onReplyDirty = useCallback((dirty: boolean) => {
     replyEdited.current = dirty;
     onDirtyChange(dirty || workEdited.current);
   }, [onDirtyChange]);
   const onWorkDirty = useCallback((dirty: boolean) => {
     workEdited.current = dirty;
-    setWorkDirty(dirty);
     onDirtyChange(dirty || replyEdited.current);
   }, [onDirtyChange]);
   const detailsButton = useRef<HTMLButtonElement>(null);
-  const closeDetailsButton = useRef<HTMLButtonElement>(null);
+  const wasDetailsOpen = useRef(false);
   const closeLightboxButton = useRef<HTMLButtonElement>(null);
   type LoadedInlineMedia = { url: string; mimeType: string; fileName: string | null };
   const mediaMounted = useRef(true);
@@ -485,11 +482,14 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
     setShowLatest(false);
   }
   function closeDetails() {
-    if (workEdited.current) return;
     setDetails(false);
-    detailsButton.current?.focus({ preventScroll: true });
   }
-  useLayoutEffect(() => { if (details) closeDetailsButton.current?.focus({ preventScroll: true }); }, [details]);
+  useLayoutEffect(() => {
+    if (wasDetailsOpen.current && !details) {
+      detailsButton.current?.focus({ preventScroll: true });
+    }
+    wasDetailsOpen.current = details;
+  }, [details]);
   useLayoutEffect(() => {
     const pane = timeline.current;
     if (!pane) return;
@@ -516,7 +516,11 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const read = useCallback(async (after: string | null = null, quiet = false) => {
     if (quiet && foregroundMessages.current) return;
     const request = ++messageRequest.current;
-    if (!quiet) { foregroundMessages.current = true; setIndexing(false); }
+    if (!quiet) {
+      foregroundMessages.current = true;
+      setIndexing(false);
+      if (after) setLoadingOlder(true);
+    }
     try {
       const got = await readWhileIndexing(
         async () => parseMessages(await serviceCall(scope, "whatsapp.messages", { conversation_id: id, limit: 50, ...(after ? { cursor: after } : {}) })),
@@ -537,7 +541,12 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
       setIndexing(false);
       setMessages(m => quiet && m.state === "ok" ? m : { state: "failed", text: errorText(e, "Messages could not be read.") });
     }
-    finally { if (!quiet && request === messageRequest.current) foregroundMessages.current = false; }
+    finally {
+      if (!quiet && request === messageRequest.current) {
+        foregroundMessages.current = false;
+        setLoadingOlder(false);
+      }
+    }
   }, [scope, id]);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [inserted, setInserted] = useState<{ text: string; n: number } | null>(null);
@@ -610,7 +619,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
     if (composeId === null || !channel.hostReplyLayout || !pane) return;
     const measure = () => {
       if (!channel.hostReplyLayout) return;
-      if (getComputedStyle(pane).visibility === "hidden") {
+      if (details || lightboxId !== null || getComputedStyle(pane).visibility === "hidden") {
         channel.publishReplyLayout(null);
         return;
       }
@@ -634,7 +643,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
       observer.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [composeId, details]);
+  }, [composeId, details, lightboxId]);
   const linked = scope.provider === "linked";
   const phone = c ? contactPhone(c, linked) : null;
   const workLink = inboxScope && c?.work && validWorkRef(c.work.ref, inboxScope) ? c.work : null;
@@ -648,20 +657,21 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const lightboxMessage = lightboxId ? ordered.find(m => m.id === lightboxId) ?? null : null;
   const locale = zh ? "zh" : "en";
   const day = dayFormat[locale], time = timeFormat[locale];
+  const dueDay = calendarDay(new Date());
   const loadOlder = (cursor: string) => {
     if (foregroundMessages.current) return;
     void read(cursor);
   };
-  return <article className="waba-conversation" data-details={details} aria-labelledby="waba-thread-title" onKeyDown={e => {
-    if (e.key === "Escape" && !e.defaultPrevented) {
-      if (lightboxId !== null) { e.preventDefault(); setLightboxId(null); return; }
-      if (details) { e.preventDefault(); closeDetails(); }
+  return <article className="waba-conversation" aria-labelledby="waba-thread-title" onKeyDown={e => {
+    if (e.key === "Escape" && !e.defaultPrevented && lightboxId !== null) {
+      e.preventDefault();
+      setLightboxId(null);
     }
   }}>
     <header className="waba-thread-head">
       <Button size="sm" variant="ghost" className="waba-back" disabled={replyDirty} onClick={onBack}>{zh ? "返回" : "Back"}</Button>
       <h2 id="waba-thread-title" tabIndex={-1}>
-        {c ? <button className="waba-details-trigger" ref={detailsButton} type="button" aria-expanded={details} aria-controls="waba-contact-details" aria-label={`${identity}${zh ? "：" : ": "}${detailsLabel}`} onClick={() => details ? closeDetails() : setDetails(true)}>
+        {c ? <button className="waba-details-trigger" ref={detailsButton} type="button" aria-haspopup="dialog" aria-expanded={details} aria-label={`${identity}${zh ? "：" : ": "}${detailsLabel}`} onClick={() => details ? closeDetails() : setDetails(true)}>
           <Avatar name={title} phone={phone} group={group} />
           <span className="waba-thread-identity">{title === phone ? <bdi dir="ltr">{phone}</bdi> : title}{subtitle !== title && <small className="waba-muted">{phone ? <bdi dir="ltr">{phone}</bdi> : subtitle}</small>}</span>
           <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M7.5 3v10m-4-10h9A1.5 1.5 0 0 1 14 4.5v7a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5v-7A1.5 1.5 0 0 1 3.5 3Z" /></svg>
@@ -669,7 +679,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
       </h2>
       {workLink && work.checked.has(workLink.ref) && (() => {
         const currentState = effectiveThreadState(record, workLink.inboundVersion);
-        return <button type="button" className="waba-work-pill" data-state={currentState} aria-expanded={details} onClick={() => details ? closeDetails() : setDetails(true)}>
+        return <button type="button" className="waba-work-pill" data-state={currentState} aria-haspopup="dialog" aria-expanded={details} onClick={() => details ? closeDetails() : setDetails(true)}>
           <span className="waba-work-dot" aria-hidden="true" />
           <span>{threadStateLabel(currentState, zh)}</span>
         </button>;
@@ -679,7 +689,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
       <div className="waba-thread-main" ref={messagePane}>
         {replyAvailability && <div className="waba-reply-availability" role="status">
           {replyAvailability !== "verified" && <Notice state={replyAvailability}>
-            {replyAvailability === "checking" ? (zh ? "正在核對收件人…" : "Verifying recipient…")
+            {replyAvailability === "checking" ? <span className="waba-inline-loading"><span className="waba-inline-spin" aria-hidden="true" /><span>{zh ? "正在核對收件人…" : "Verifying recipient…"}</span></span>
               : (zh ? "此對話暫時無法回覆，你仍可查看訊息。" : "Replies are unavailable for this chat. You can still read messages.")}
           </Notice>}
         </div>}
@@ -701,13 +711,16 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
             setShowLatest(!keepBottom.current);
           }}>
             <div className="waba-timeline-inner">
-              {conversation.state === "loading" ? <Loading>Reading the conversation…</Loading>
-                : conversation.state === "failed" ? <ErrorNotice onRetry={() => { void show(); }}>{conversation.text}</ErrorNotice> : null}
-              {messages.state === "loading" ? <Loading>{indexing ? "Indexing older messages…" : "Reading messages…"}</Loading>
-                : messages.state === "failed" ? <ErrorNotice onRetry={() => { void read(); }}>{messages.text}</ErrorNotice>
-                : <>
-                  {messages.value.cursor && <div className="waba-history-more"><Button size="sm" loading={indexing} onClick={() => loadOlder(messages.value.cursor!)}>Load older messages</Button></div>}
-                  {!ordered.length ? <EmptyState title="No messages" name="messages" /> : <ol className="waba-messages" aria-label="Messages">{ordered.map((m, index) => {
+              {conversation.state === "loading" && messages.state === "loading" ? (
+                <Loading>{indexing ? (zh ? "正在整理較早的訊息…" : "Indexing older messages…") : (zh ? "正在讀取對話…" : "Reading conversation…")}</Loading>
+              ) : <>
+                {conversation.state === "loading" ? <Loading>{zh ? "正在讀取對話…" : "Reading conversation…"}</Loading>
+                  : conversation.state === "failed" ? <ErrorNotice onRetry={() => { void show(); }}>{conversation.text}</ErrorNotice> : null}
+                {messages.state === "loading" ? <Loading>{indexing ? (zh ? "正在整理較早的訊息…" : "Indexing older messages…") : (zh ? "正在讀取訊息…" : "Reading messages…")}</Loading>
+                  : messages.state === "failed" ? <ErrorNotice onRetry={() => { void read(); }}>{messages.text}</ErrorNotice>
+                  : <>
+                    {messages.value.cursor && <div className="waba-history-more"><Button size="sm" loading={loadingOlder || indexing} onClick={() => loadOlder(messages.value.cursor!)}>{zh ? "載入較早訊息" : "Load older messages"}</Button></div>}
+                    {!ordered.length ? <EmptyState title={zh ? "沒有訊息" : "No messages"} name="messages" /> : <ol className="waba-messages" aria-label="Messages">{ordered.map((m, index) => {
                     const at = stamp(m.createdAt), previous = stamp(ordered[index - 1]?.createdAt ?? null);
                     const date = at === null ? null : day.format(at);
                     return <Fragment key={m.id}>
@@ -735,6 +748,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
                     </Fragment>;
                   })}</ol>}
                 </>}
+              </>}
             </div>
           </div>
           {showLatest && <div className="waba-jump"><Button size="sm" onClick={jumpToLatest}>{zh ? "跳至最新訊息" : "Jump to latest"}</Button></div>}
@@ -750,35 +764,28 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
           {canTemplate && <Button size="sm" disabled={replyDirty} onClick={() => onRecipient(c)}>{zh ? "使用已核准的範本…" : "Send an approved template…"}</Button>}
         </footer>}
       </div>
-      {c && <aside id="waba-contact-details" className="waba-contact-details" aria-labelledby="waba-contact-title" hidden={!details}>
-        <header className="waba-head"><h3 id="waba-contact-title">{group ? (zh ? "群組詳情" : "Group details") : (zh ? "聯絡人詳情" : "Contact details")}</h3><button className="btn" type="button" ref={closeDetailsButton} disabled={workDirty} onClick={closeDetails}>{zh ? "關閉" : "Close"}</button></header>
-        <div className="waba-contact-profile"><Avatar name={title} phone={phone} group={group} /><strong>{title}</strong></div>
-        <dl className="waba-contact-facts">
-          {group ? <div><dt>{zh ? "類型" : "Type"}</dt><dd>{subtitle}</dd></div> : <div><dt>{zh ? "電話" : "Phone"}</dt>
-            <dd>{phone ? <bdi dir="ltr">{phone}</bdi> : <span className="waba-muted">{phoneUnavailable(zh)}</span>}</dd></div>}
-          {c.status && <div><dt>{zh ? "狀態" : "Status"}</dt><dd>{c.status}</dd></div>}
-          {c.lastInboundAt && <div><dt>{zh ? "最後收到訊息" : "Last inbound"}</dt><dd>{when(c.lastInboundAt)}</dd></div>}
-        </dl>
-        {details && workLink && <ContactWork key={workLink.ref} scope={scope} link={workLink} zh={zh} onSaved={onWork} onDirty={onWorkDirty} />}
-        <section aria-label={zh ? "已分享的媒體" : "Shared media"}>
-          <h4>{zh ? "已分享的媒體" : "Shared media"}</h4>
-          {photos.length ? <ul className="waba-contact-media">{photos.map(m => <li key={m.id}>
-            {m.media?.kind === "image" && m.media.available && hostMediaDownload
-              ? <button type="button" className="waba-media-trigger" aria-label={m.media.fileName ?? (zh ? "檢視相片" : "View photo")} onClick={() => setLightboxId(m.id)}>
-                  {loadedMedia.get(m.id)
-                    ? <img className="waba-photo-preview" src={loadedMedia.get(m.id)!.url} alt={m.media.fileName ?? (zh ? "相片" : "Photo")} loading="lazy" decoding="async" />
-                    : m.previewJpeg
-                    ? <PhotoPreview jpeg={m.previewJpeg} label={zh ? "相片預覽" : "Photo preview"} unavailable={unavailablePreview} />
-                    : <span className="waba-media-tile"><span className="waba-media-badge">IMG</span><span className="waba-media-info"><span className="waba-media-title">{m.media.fileName ?? (zh ? "相片" : "Photo")}</span></span></span>}
-                </button>
-              : m.previewJpeg
-              ? <PhotoPreview jpeg={m.previewJpeg} label={zh ? "相片預覽" : "Photo preview"} unavailable={unavailablePreview} />
-              : <p className="waba-muted">{unavailablePreview}</p>}
-          </li>)}</ul>
-            : <p className="waba-muted">{zh ? "已載入的訊息沒有相片預覽。" : "No photo previews in loaded messages."}</p>}
-        </section>
-      </aside>}
     </div>
+    {details && c && <ContactDrawer
+      key={workLink?.ref ?? id}
+      scope={scope}
+      conversation={c}
+      workLink={workLink}
+      title={title}
+      subtitle={subtitle}
+      phone={phone}
+      group={group}
+      zh={zh}
+      avatar={<Avatar name={title} phone={phone} group={group} />}
+      photos={photos}
+      loadedMedia={loadedMedia}
+      hostMediaDownload={hostMediaDownload}
+      unavailablePreview={unavailablePreview}
+      dueDay={dueDay}
+      onSaved={onWork}
+      onDirty={onWorkDirty}
+      onOpenLightbox={messageId => setLightboxId(messageId)}
+      onClose={closeDetails}
+    />}
     {lightboxMessage?.media && <MediaLightbox
       conversationId={id}
       message={lightboxMessage}
@@ -1054,6 +1061,17 @@ function MediaLightbox({
     if (!loaded?.url) retryLoad();
     else setLoading(false);
   }, [loaded?.url, retryLoad]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
 
   async function saveImage() {
     if (saving) return;

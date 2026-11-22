@@ -34,6 +34,9 @@ function validFields(v: ThreadFields): boolean {
 export function effectiveThreadState(work: ThreadFields | null | undefined, inboundVersion: number): ThreadState {
   return !work || inboundVersion > work.seenInbound ? "needs_reply" : work.state;
 }
+export function dueLabel(date: string, today: string, zh: boolean) {
+  return date === today ? (zh ? "今日跟進" : "Due today") : date < today ? (zh ? "跟進逾期" : "Overdue") : `${zh ? "跟進" : "Follow up"} ${date}`;
+}
 function workReceipt(value: unknown, installId: string, expectedScope?: string): ThreadWork {
   if (!object(value) || value.table !== "inbox_work" || value.install_id !== installId || !validWorkRef(value.id, expectedScope) || !integer(value.revision) || value.revision < 1 || !object(value.profile)) invalid("Invalid inbox work receipt");
   const p = value.profile;
