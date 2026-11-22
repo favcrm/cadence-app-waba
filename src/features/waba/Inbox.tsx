@@ -4,9 +4,10 @@ import { channel } from "../../bridge/channel";
 import { patchRoute } from "../../bridge/route";
 import { routable,useOnPush,useScope,type DisplayScope } from "../../bridge/scope";
 import { serviceCall,serviceSlot } from "../../bridge/services";
-import ContactWork,{ threadStateLabel } from "./ContactWork";
-import { effectiveThreadState,listThreadWork,validWorkRef,type ThreadState,type ThreadWork } from "./inboxWork";
+import ContactDrawer,{ threadStateLabel } from "./ContactDrawer";
+import { dueLabel,effectiveThreadState,listThreadWork,validWorkRef,type ThreadState,type ThreadWork } from "./inboxWork";
 import { useWorkBrowse } from "./useWorkBrowse";
+import { useLivePoll } from "./useLivePoll";
 import type { Recipient } from "./Templates";
 import { declinedReason,errorText,formatMediaBytes,formatMediaDuration,parseConversation,parseConversations,parseDraft,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Draft,type LinkedMediaInfo,type Message,type ReplyState,type ReplyStatus } from "./door";
 
@@ -15,8 +16,81 @@ const PAGE = 25;
 export interface Assist { show: boolean; brief: boolean; open: boolean; discard: boolean }
 /** Takeover actions the host granted; the banner itself is shown to everyone. */
 export interface Handoff { set: boolean; release: boolean }
-const DRAFT_POLL_MS = 5000;
+const LIVE_POLL_MS = 5000;
 type Load<T> = { state: "loading" } | { state: "ok"; value: T } | { state: "failed"; text: string };
+
+function sameMedia(a: LinkedMediaInfo | null, b: LinkedMediaInfo | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.kind === b.kind &&
+    a.mimeType === b.mimeType &&
+    a.fileName === b.fileName &&
+    a.byteLength === b.byteLength &&
+    a.width === b.width &&
+    a.height === b.height &&
+    a.durationSeconds === b.durationSeconds &&
+    a.ptt === b.ptt &&
+    a.caption === b.caption &&
+    a.available === b.available &&
+    a.unavailableReason === b.unavailableReason
+  );
+}
+
+function sameConversationRow(a: ConversationRow, b: ConversationRow): boolean {
+  if (a === b) return true;
+  return (
+    a.conversationId === b.conversationId &&
+    a.contact.name === b.contact.name &&
+    a.contact.phone === b.contact.phone &&
+    (a.lastMessage === b.lastMessage ||
+      (!!a.lastMessage &&
+        !!b.lastMessage &&
+        a.lastMessage.direction === b.lastMessage.direction &&
+        a.lastMessage.body === b.lastMessage.body &&
+        a.lastMessage.createdAt === b.lastMessage.createdAt)) &&
+    a.unreadCount === b.unreadCount &&
+    a.replyMode === b.replyMode &&
+    a.freeformUntil === b.freeformUntil &&
+    (a.work === b.work ||
+      (!!a.work &&
+        !!b.work &&
+        a.work.ref === b.work.ref &&
+        a.work.inboundVersion === b.work.inboundVersion))
+  );
+}
+
+function sameConversationRows(a: ConversationRow[], b: ConversationRow[]): boolean {
+  return a.length === b.length && a.every((row, i) => sameConversationRow(row, b[i]));
+}
+
+function sameConversation(a: Conversation, b: Conversation): boolean {
+  return (
+    sameConversationRow(a, b) &&
+    a.status === b.status &&
+    a.lastInboundAt === b.lastInboundAt &&
+    a.handoffAt === b.handoffAt
+  );
+}
+
+function sameMessage(a: Message, b: Message): boolean {
+  if (a === b) return true;
+  return (
+    a.id === b.id &&
+    a.direction === b.direction &&
+    a.body === b.body &&
+    a.status === b.status &&
+    a.senderType === b.senderType &&
+    a.createdAt === b.createdAt &&
+    a.type === b.type &&
+    a.previewJpeg === b.previewJpeg &&
+    sameMedia(a.media, b.media)
+  );
+}
+
+function sameMessageRows(a: Message[], b: Message[]): boolean {
+  return a.length === b.length && a.every((row, i) => sameMessage(row, b[i]));
+}
 
 function contactPhone(row: ConversationRow, linked: boolean) {
   if (linked && row.conversationId.endsWith("@g.us")) return null;
@@ -103,9 +177,6 @@ const emptyWorkIndex = (): WorkIndex => ({ records: new Map(), checked: new Set(
 function calendarDay(now: Date) {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
-function dueLabel(date: string, today: string, zh: boolean) {
-  return date === today ? (zh ? "今日跟進" : "Due today") : date < today ? (zh ? "跟進逾期" : "Overdue") : `${zh ? "跟進" : "Follow up"} ${date}`;
-}
 
 export default function Inbox({ scope, canReply, canTemplate, assist, handoff, routeId: routed, initialId, onRecipient, replyDirty, onDirtyChange, openSettings, tools }: { scope: DisplayScope; canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; routeId: string | null; initialId: string | null; onRecipient: (r: Recipient) => void; replyDirty: boolean; onDirtyChange: (dirty: boolean) => void; openSettings: () => Promise<unknown>; tools: ReactNode }) {
   const zh = useScope()?.presentationLocale === "zh-TW", locale = zh ? "zh" : "en";
@@ -146,10 +217,10 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
     if (newMessage || (selected && !openRow.current?.getClientRects().length)) thread.current?.querySelector<HTMLElement>("h2")?.focus({ preventScroll: true });
     else if (!selected) openRow.current?.focus({ preventScroll: true });
   }, [newMessage, selected]);
-  // `quiet` is a host-push refresh: no loading state, loaded pages kept, errors
-  // leave what is shown in place.
-  const page = useCallback(async (after: string | null, quiet = false) => {
-    if (quiet && foregroundList.current) return;
+  // `quiet` is a host-push or background poll refresh: no loading state, loaded pages
+  // kept, errors leave what is shown in place.
+  const page = useCallback(async (after: string | null, quiet = false): Promise<boolean> => {
+    if (quiet && foregroundList.current) return true;
     const request = ++listRequest.current;
     if (!quiet) { foregroundList.current = true; setList(after ? "more" : "loading"); }
     try {
@@ -158,7 +229,7 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
         () => request === listRequest.current,
         () => { if (!quiet) setList("indexing"); },
       );
-      if (!got) return;
+      if (!got) return true;
       const nextInbox = linked ? got.inboxScope : null;
       const changed = nextInbox !== liveInbox.current;
       if (changed) {
@@ -169,25 +240,40 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
         liveInbox.current = nextInbox;
         setInboxScope(nextInbox); setWork(emptyWorkIndex()); setWorkError(false);
       }
-      setRows(r => changed ? got.rows : after ? [...r, ...got.rows.filter(n => !r.some(o => o.conversationId === n.conversationId))]
-        : quiet ? [...got.rows, ...r.filter(o => !got.rows.some(n => n.conversationId === o.conversationId))] : got.rows);
-      setCursor(c => quiet && c && !changed ? c : got.cursor); setList("ok");
+      setRows(r => {
+        const nextRows = changed ? got.rows : after ? [...r, ...got.rows.filter(n => !r.some(o => o.conversationId === n.conversationId))]
+          : quiet ? [...got.rows, ...r.filter(o => !got.rows.some(n => n.conversationId === o.conversationId))] : got.rows;
+        return sameConversationRows(r, nextRows) ? r : nextRows;
+      });
+      setCursor(c => quiet && c && !changed ? c : got.cursor); setList(l => l === "ok" ? l : "ok");
       if (nextInbox && got.rows.length) {
         const refs = got.rows.flatMap(r => r.work ? [r.work.ref] : []);
         try {
           const records = await listThreadWork(scope, nextInbox, refs);
-          if (request !== listRequest.current) return;
+          if (request !== listRequest.current) return true;
           setWork(previous => {
             const next = { records: new Map(previous.records), checked: new Set(previous.checked) };
-            for (const ref of refs) next.checked.add(ref);
-            for (const record of records) if ((next.records.get(record.ref)?.revision ?? 0) < record.revision) next.records.set(record.ref, record);
-            return next;
+            let workChanged = false;
+            for (const ref of refs) {
+              if (!next.checked.has(ref)) {
+                next.checked.add(ref);
+                workChanged = true;
+              }
+            }
+            for (const record of records) {
+              if ((next.records.get(record.ref)?.revision ?? 0) < record.revision) {
+                next.records.set(record.ref, record);
+                workChanged = true;
+              }
+            }
+            return workChanged ? next : previous;
           });
-          setWorkError(false);
+          setWorkError(e => e ? false : e);
         } catch { if (request === listRequest.current) setWorkError(true); }
       }
+      return true;
     } catch (error) {
-      if (request !== listRequest.current) return;
+      if (request !== listRequest.current) return true;
       if (linked && error instanceof ApiError && error.code === "not_granted") {
         openingRequest.current++;
         liveInbox.current = null;
@@ -195,11 +281,17 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
         setOpening(false); setOpenError(false); setQueue("all"); setRows([]); setCursor(null);
         setWork(emptyWorkIndex()); setWorkError(false); setList("failed");
       } else if (!quiet) setList("failed");
+      return false;
     }
     finally { if (!quiet && request === listRequest.current) foregroundList.current = false; }
   }, [scope, linked]);
   useEffect(() => { void page(null); return () => { listRequest.current++; foregroundList.current = false; }; }, [page]);
   useOnPush(() => page(null, true));
+  useLivePoll({
+    enabled: list === "ok",
+    poll: () => page(null, true),
+    intervalMs: LIVE_POLL_MS,
+  });
   function select(id: string | null, observed: Conversation | null = null) {
     openingRequest.current++;
     setOpening(false); setOpenError(false); setResolved(observed);
@@ -309,6 +401,7 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
         <button type="button" className="waba-active-reset" onClick={() => setQueue("all")}>{zh ? "重設" : "Reset"}</button>
       </div>}
       {workError && queue !== "due" && <ErrorNotice bare onRetry={() => { void page(null, true); }}>{zh ? "無法載入跟進狀態。" : "Couldn’t refresh conversation work."}</ErrorNotice>}
+      {opening && <Loading>{zh ? "正在開啟對話…" : "Opening conversation…"}</Loading>}
       {openError && <ErrorNotice bare>{zh ? "無法開啟對話。請檢查已連結帳戶。" : "Couldn’t open that conversation. Check the linked account."}</ErrorNotice>}
       {browse.page?.state === "failed" && <ErrorNotice bare onRetry={() => { void browse.load(browse.page?.cursor); }}>{zh ? "無法讀取搜尋結果。" : "Couldn’t read those results."}</ErrorNotice>}
       {list === "indexing" && rows.length > 0 && <p className="waba-muted" role="status">{zh ? "正在整理較早的對話…" : "Indexing older conversations…"}</p>}
@@ -409,6 +502,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const [conversation, setConversation] = useState<Load<Conversation>>(() => initial?.conversationId === id ? { state: "ok", value: initial } : { state: "loading" });
   const [messages, setMessages] = useState<Load<{ rows: Message[]; cursor: string | null; previousAnchor?: { row: HTMLElement; top: number } }>>({ state: "loading" });
   const [indexing, setIndexing] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const messageRequest = useRef(0);
   const foregroundMessages = useRef(false);
   const timeline = useRef<HTMLDivElement>(null);
@@ -418,18 +512,16 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const [showLatest, setShowLatest] = useState(false);
   const [details, setDetails] = useState(false);
   const replyEdited = useRef(false), workEdited = useRef(false);
-  const [workDirty, setWorkDirty] = useState(false);
   const onReplyDirty = useCallback((dirty: boolean) => {
     replyEdited.current = dirty;
     onDirtyChange(dirty || workEdited.current);
   }, [onDirtyChange]);
   const onWorkDirty = useCallback((dirty: boolean) => {
     workEdited.current = dirty;
-    setWorkDirty(dirty);
     onDirtyChange(dirty || replyEdited.current);
   }, [onDirtyChange]);
   const detailsButton = useRef<HTMLButtonElement>(null);
-  const closeDetailsButton = useRef<HTMLButtonElement>(null);
+  const wasDetailsOpen = useRef(false);
   const closeLightboxButton = useRef<HTMLButtonElement>(null);
   type LoadedInlineMedia = { url: string; mimeType: string; fileName: string | null };
   const mediaMounted = useRef(true);
@@ -485,11 +577,14 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
     setShowLatest(false);
   }
   function closeDetails() {
-    if (workEdited.current) return;
     setDetails(false);
-    detailsButton.current?.focus({ preventScroll: true });
   }
-  useLayoutEffect(() => { if (details) closeDetailsButton.current?.focus({ preventScroll: true }); }, [details]);
+  useLayoutEffect(() => {
+    if (wasDetailsOpen.current && !details) {
+      detailsButton.current?.focus({ preventScroll: true });
+    }
+    wasDetailsOpen.current = details;
+  }, [details]);
   useLayoutEffect(() => {
     const pane = timeline.current;
     if (!pane) return;
@@ -503,56 +598,91 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
     observer.observe(pane);
     return () => observer.disconnect();
   }, []);
-  // `quiet` is a host-push refresh: shown data stays on a failed read, and
-  // messages already loaded stay (newer rows win by id).
-  const show = useCallback(async (quiet = false) => {
+  // `quiet` is a host-push or background poll refresh: shown data stays on a failed
+  // read, and messages already loaded stay (newer rows win by id).
+  const show = useCallback(async (quiet = false): Promise<boolean> => {
     try {
       const next = parseConversation(await serviceCall(scope, "whatsapp.conversations.show", { conversation_id: id }));
       if (next.conversationId !== id) throw new ApiError("The conversation identity changed", 502);
-      setConversation({ state: "ok", value: next });
+      setConversation(c => c.state === "ok" && sameConversation(c.value, next) ? c : { state: "ok", value: next });
+      return true;
     }
-    catch (e) { setConversation(c => quiet && c.state === "ok" ? c : { state: "failed", text: errorText(e, "The conversation could not be read.") }); }
+    catch (e) {
+      setConversation(c => quiet && c.state === "ok" ? c : { state: "failed", text: errorText(e, "The conversation could not be read.") });
+      return false;
+    }
   }, [scope, id]);
-  const read = useCallback(async (after: string | null = null, quiet = false) => {
-    if (quiet && foregroundMessages.current) return;
+  const read = useCallback(async (after: string | null = null, quiet = false): Promise<boolean> => {
+    if (quiet && foregroundMessages.current) return true;
     const request = ++messageRequest.current;
-    if (!quiet) { foregroundMessages.current = true; setIndexing(false); }
+    if (!quiet) {
+      foregroundMessages.current = true;
+      setIndexing(false);
+      if (after) setLoadingOlder(true);
+    }
     try {
       const got = await readWhileIndexing(
         async () => parseMessages(await serviceCall(scope, "whatsapp.messages", { conversation_id: id, limit: 50, ...(after ? { cursor: after } : {}) })),
         () => request === messageRequest.current,
         () => setIndexing(true),
       );
-      if (!got) return;
-      setIndexing(false);
+      if (!got) return true;
+      setIndexing(i => i ? false : i);
       // A dock resize can change the scroll extent in the same commit as an
       // older page. Anchor a retained row, not the height including the dock.
       const row = after ? timeline.current?.querySelector<HTMLElement>(".waba-message") : null;
       const previousAnchor = row ? { row, top: row.offsetTop } : undefined;
-      setMessages(m => m.state === "ok" && (after || quiet)
-        ? { state: "ok", value: { rows: after ? [...m.value.rows, ...got.rows.filter(n => !m.value.rows.some(o => o.id === n.id))] : [...got.rows, ...m.value.rows.filter(o => !got.rows.some(n => n.id === o.id))], cursor: quiet ? m.value.cursor : got.cursor, previousAnchor } }
-        : { state: "ok", value: { rows: got.rows, cursor: got.cursor } });
+      setMessages(m => {
+        if (m.state === "ok" && (after || quiet)) {
+          const nextRows = after
+            ? [...m.value.rows, ...got.rows.filter(n => !m.value.rows.some(o => o.id === n.id))]
+            : [...got.rows, ...m.value.rows.filter(o => !got.rows.some(n => n.id === o.id))];
+          if (!after && sameMessageRows(m.value.rows, nextRows)) return m;
+          return {
+            state: "ok",
+            value: {
+              rows: nextRows,
+              cursor: quiet ? m.value.cursor : got.cursor,
+              ...(previousAnchor ? { previousAnchor } : {}),
+            },
+          };
+        }
+        return { state: "ok", value: { rows: got.rows, cursor: got.cursor } };
+      });
+      return true;
     } catch (e) {
-      if (request !== messageRequest.current) return;
+      if (request !== messageRequest.current) return true;
       setIndexing(false);
       setMessages(m => quiet && m.state === "ok" ? m : { state: "failed", text: errorText(e, "Messages could not be read.") });
+      return false;
     }
-    finally { if (!quiet && request === messageRequest.current) foregroundMessages.current = false; }
+    finally {
+      if (!quiet && request === messageRequest.current) {
+        foregroundMessages.current = false;
+        setLoadingOlder(false);
+      }
+    }
   }, [scope, id]);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [inserted, setInserted] = useState<{ text: string; n: number } | null>(null);
   const [assistNote, setAssistNote] = useState<string | null>(null);
-  const readDraft = useCallback(async () => {
-    if (!assist.show) { setDraft(null); return; }
+  const readDraft = useCallback(async (): Promise<boolean> => {
+    if (!assist.show) { setDraft(null); return true; }
     // A failed read keeps what is shown: the chip never invents or drops a draft.
-    try { setDraft(parseDraft(await serviceCall(scope, "whatsapp.draft.show", { conversation_id: id }))); } catch { /* next poll retries */ }
+    try {
+      const nextDraft = parseDraft(await serviceCall(scope, "whatsapp.draft.show", { conversation_id: id }));
+      setDraft(prev => prev === nextDraft || (!!prev && !!nextDraft && prev.draftId === nextDraft.draftId && prev.text === nextDraft.text) ? prev : nextDraft);
+      return true;
+    } catch { return false; /* next poll retries */ }
   }, [scope, id, assist.show]);
   useEffect(() => {
     void readDraft();
-    if (!assist.show) return;
-    const t = setInterval(() => { void readDraft(); }, DRAFT_POLL_MS);
-    return () => clearInterval(t);
-  }, [readDraft, assist.show]);
+  }, [readDraft]);
+  useLivePoll({
+    enabled: assist.show,
+    poll: readDraft,
+    intervalMs: LIVE_POLL_MS,
+  });
   const reload = useCallback(() => { void show(); void read(); void readDraft(); }, [show, read, readDraft]);
   useEffect(() => {
     if (initial?.conversationId === id) { void read(); void readDraft(); } else reload();
@@ -565,7 +695,16 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   }
   // The reply went out: its draft is spent. A failed discard leaves the chip, never a retry loop.
   const onSent = useCallback(() => { if (assist.discard) void discard(); }, [assist.discard, scope, id]);
-  useOnPush(() => Promise.all([show(true), read(null, true)]));
+  const refreshThreadQuiet = useCallback(async (): Promise<boolean> => {
+    const results = await Promise.all([show(true), read(null, true)]);
+    return results[0] && results[1];
+  }, [show, read]);
+  useOnPush(refreshThreadQuiet);
+  useLivePoll({
+    enabled: conversation.state === "ok" || messages.state === "ok",
+    poll: refreshThreadQuiet,
+    intervalMs: LIVE_POLL_MS,
+  });
   const c = conversation.state === "ok" ? conversation.value : null;
   const ordered = useMemo(() => messages.state === "ok"
     ? [...messages.value.rows].sort((a, b) => (stamp(a.createdAt) ?? 0) - (stamp(b.createdAt) ?? 0))
@@ -610,7 +749,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
     if (composeId === null || !channel.hostReplyLayout || !pane) return;
     const measure = () => {
       if (!channel.hostReplyLayout) return;
-      if (getComputedStyle(pane).visibility === "hidden") {
+      if (details || lightboxId !== null || getComputedStyle(pane).visibility === "hidden") {
         channel.publishReplyLayout(null);
         return;
       }
@@ -634,7 +773,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
       observer.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [composeId, details]);
+  }, [composeId, details, lightboxId]);
   const linked = scope.provider === "linked";
   const phone = c ? contactPhone(c, linked) : null;
   const workLink = inboxScope && c?.work && validWorkRef(c.work.ref, inboxScope) ? c.work : null;
@@ -648,20 +787,21 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const lightboxMessage = lightboxId ? ordered.find(m => m.id === lightboxId) ?? null : null;
   const locale = zh ? "zh" : "en";
   const day = dayFormat[locale], time = timeFormat[locale];
+  const dueDay = calendarDay(new Date());
   const loadOlder = (cursor: string) => {
     if (foregroundMessages.current) return;
     void read(cursor);
   };
-  return <article className="waba-conversation" data-details={details} aria-labelledby="waba-thread-title" onKeyDown={e => {
-    if (e.key === "Escape" && !e.defaultPrevented) {
-      if (lightboxId !== null) { e.preventDefault(); setLightboxId(null); return; }
-      if (details) { e.preventDefault(); closeDetails(); }
+  return <article className="waba-conversation" aria-labelledby="waba-thread-title" onKeyDown={e => {
+    if (e.key === "Escape" && !e.defaultPrevented && lightboxId !== null) {
+      e.preventDefault();
+      setLightboxId(null);
     }
   }}>
     <header className="waba-thread-head">
       <Button size="sm" variant="ghost" className="waba-back" disabled={replyDirty} onClick={onBack}>{zh ? "返回" : "Back"}</Button>
       <h2 id="waba-thread-title" tabIndex={-1}>
-        {c ? <button className="waba-details-trigger" ref={detailsButton} type="button" aria-expanded={details} aria-controls="waba-contact-details" aria-label={`${identity}${zh ? "：" : ": "}${detailsLabel}`} onClick={() => details ? closeDetails() : setDetails(true)}>
+        {c ? <button className="waba-details-trigger" ref={detailsButton} type="button" aria-haspopup="dialog" aria-expanded={details} aria-label={`${identity}${zh ? "：" : ": "}${detailsLabel}`} onClick={() => details ? closeDetails() : setDetails(true)}>
           <Avatar name={title} phone={phone} group={group} />
           <span className="waba-thread-identity">{title === phone ? <bdi dir="ltr">{phone}</bdi> : title}{subtitle !== title && <small className="waba-muted">{phone ? <bdi dir="ltr">{phone}</bdi> : subtitle}</small>}</span>
           <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M7.5 3v10m-4-10h9A1.5 1.5 0 0 1 14 4.5v7a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5v-7A1.5 1.5 0 0 1 3.5 3Z" /></svg>
@@ -669,7 +809,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
       </h2>
       {workLink && work.checked.has(workLink.ref) && (() => {
         const currentState = effectiveThreadState(record, workLink.inboundVersion);
-        return <button type="button" className="waba-work-pill" data-state={currentState} aria-expanded={details} onClick={() => details ? closeDetails() : setDetails(true)}>
+        return <button type="button" className="waba-work-pill" data-state={currentState} aria-haspopup="dialog" aria-expanded={details} onClick={() => details ? closeDetails() : setDetails(true)}>
           <span className="waba-work-dot" aria-hidden="true" />
           <span>{threadStateLabel(currentState, zh)}</span>
         </button>;
@@ -679,7 +819,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
       <div className="waba-thread-main" ref={messagePane}>
         {replyAvailability && <div className="waba-reply-availability" role="status">
           {replyAvailability !== "verified" && <Notice state={replyAvailability}>
-            {replyAvailability === "checking" ? (zh ? "正在核對收件人…" : "Verifying recipient…")
+            {replyAvailability === "checking" ? <span className="waba-inline-loading"><span className="waba-inline-spin" aria-hidden="true" /><span>{zh ? "正在核對收件人…" : "Verifying recipient…"}</span></span>
               : (zh ? "此對話暫時無法回覆，你仍可查看訊息。" : "Replies are unavailable for this chat. You can still read messages.")}
           </Notice>}
         </div>}
@@ -701,13 +841,16 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
             setShowLatest(!keepBottom.current);
           }}>
             <div className="waba-timeline-inner">
-              {conversation.state === "loading" ? <Loading>Reading the conversation…</Loading>
-                : conversation.state === "failed" ? <ErrorNotice onRetry={() => { void show(); }}>{conversation.text}</ErrorNotice> : null}
-              {messages.state === "loading" ? <Loading>{indexing ? "Indexing older messages…" : "Reading messages…"}</Loading>
-                : messages.state === "failed" ? <ErrorNotice onRetry={() => { void read(); }}>{messages.text}</ErrorNotice>
-                : <>
-                  {messages.value.cursor && <div className="waba-history-more"><Button size="sm" loading={indexing} onClick={() => loadOlder(messages.value.cursor!)}>Load older messages</Button></div>}
-                  {!ordered.length ? <EmptyState title="No messages" name="messages" /> : <ol className="waba-messages" aria-label="Messages">{ordered.map((m, index) => {
+              {conversation.state === "loading" && messages.state === "loading" ? (
+                <Loading>{indexing ? (zh ? "正在整理較早的訊息…" : "Indexing older messages…") : (zh ? "正在讀取對話…" : "Reading conversation…")}</Loading>
+              ) : <>
+                {conversation.state === "loading" ? <Loading>{zh ? "正在讀取對話…" : "Reading conversation…"}</Loading>
+                  : conversation.state === "failed" ? <ErrorNotice onRetry={() => { void show(); }}>{conversation.text}</ErrorNotice> : null}
+                {messages.state === "loading" ? <Loading>{indexing ? (zh ? "正在整理較早的訊息…" : "Indexing older messages…") : (zh ? "正在讀取訊息…" : "Reading messages…")}</Loading>
+                  : messages.state === "failed" ? <ErrorNotice onRetry={() => { void read(); }}>{messages.text}</ErrorNotice>
+                  : <>
+                    {messages.value.cursor && <div className="waba-history-more"><Button size="sm" loading={loadingOlder || indexing} onClick={() => loadOlder(messages.value.cursor!)}>{zh ? "載入較早訊息" : "Load older messages"}</Button></div>}
+                    {!ordered.length ? <EmptyState title={zh ? "沒有訊息" : "No messages"} name="messages" /> : <ol className="waba-messages" aria-label="Messages">{ordered.map((m, index) => {
                     const at = stamp(m.createdAt), previous = stamp(ordered[index - 1]?.createdAt ?? null);
                     const date = at === null ? null : day.format(at);
                     return <Fragment key={m.id}>
@@ -735,6 +878,7 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
                     </Fragment>;
                   })}</ol>}
                 </>}
+              </>}
             </div>
           </div>
           {showLatest && <div className="waba-jump"><Button size="sm" onClick={jumpToLatest}>{zh ? "跳至最新訊息" : "Jump to latest"}</Button></div>}
@@ -764,35 +908,28 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
           {canTemplate && <Button size="sm" disabled={replyDirty} onClick={() => onRecipient(c)}>{zh ? "使用已核准的範本…" : "Send an approved template…"}</Button>}
         </footer>}
       </div>
-      {c && <aside id="waba-contact-details" className="waba-contact-details" aria-labelledby="waba-contact-title" hidden={!details}>
-        <header className="waba-head"><h3 id="waba-contact-title">{group ? (zh ? "群組詳情" : "Group details") : (zh ? "聯絡人詳情" : "Contact details")}</h3><button className="btn" type="button" ref={closeDetailsButton} disabled={workDirty} onClick={closeDetails}>{zh ? "關閉" : "Close"}</button></header>
-        <div className="waba-contact-profile"><Avatar name={title} phone={phone} group={group} /><strong>{title}</strong></div>
-        <dl className="waba-contact-facts">
-          {group ? <div><dt>{zh ? "類型" : "Type"}</dt><dd>{subtitle}</dd></div> : <div><dt>{zh ? "電話" : "Phone"}</dt>
-            <dd>{phone ? <bdi dir="ltr">{phone}</bdi> : <span className="waba-muted">{phoneUnavailable(zh)}</span>}</dd></div>}
-          {c.status && <div><dt>{zh ? "狀態" : "Status"}</dt><dd>{c.status}</dd></div>}
-          {c.lastInboundAt && <div><dt>{zh ? "最後收到訊息" : "Last inbound"}</dt><dd>{when(c.lastInboundAt)}</dd></div>}
-        </dl>
-        {details && workLink && <ContactWork key={workLink.ref} scope={scope} link={workLink} zh={zh} onSaved={onWork} onDirty={onWorkDirty} />}
-        <section aria-label={zh ? "已分享的媒體" : "Shared media"}>
-          <h4>{zh ? "已分享的媒體" : "Shared media"}</h4>
-          {photos.length ? <ul className="waba-contact-media">{photos.map(m => <li key={m.id}>
-            {m.media?.kind === "image" && m.media.available && hostMediaDownload
-              ? <button type="button" className="waba-media-trigger" aria-label={m.media.fileName ?? (zh ? "檢視相片" : "View photo")} onClick={() => setLightboxId(m.id)}>
-                  {loadedMedia.get(m.id)
-                    ? <img className="waba-photo-preview" src={loadedMedia.get(m.id)!.url} alt={m.media.fileName ?? (zh ? "相片" : "Photo")} loading="lazy" decoding="async" />
-                    : m.previewJpeg
-                    ? <PhotoPreview jpeg={m.previewJpeg} label={zh ? "相片預覽" : "Photo preview"} unavailable={unavailablePreview} />
-                    : <span className="waba-media-tile"><span className="waba-media-badge">IMG</span><span className="waba-media-info"><span className="waba-media-title">{m.media.fileName ?? (zh ? "相片" : "Photo")}</span></span></span>}
-                </button>
-              : m.previewJpeg
-              ? <PhotoPreview jpeg={m.previewJpeg} label={zh ? "相片預覽" : "Photo preview"} unavailable={unavailablePreview} />
-              : <p className="waba-muted">{unavailablePreview}</p>}
-          </li>)}</ul>
-            : <p className="waba-muted">{zh ? "已載入的訊息沒有相片預覽。" : "No photo previews in loaded messages."}</p>}
-        </section>
-      </aside>}
     </div>
+    {details && c && <ContactDrawer
+      key={workLink?.ref ?? id}
+      scope={scope}
+      conversation={c}
+      workLink={workLink}
+      title={title}
+      subtitle={subtitle}
+      phone={phone}
+      group={group}
+      zh={zh}
+      avatar={<Avatar name={title} phone={phone} group={group} />}
+      photos={photos}
+      loadedMedia={loadedMedia}
+      hostMediaDownload={hostMediaDownload}
+      unavailablePreview={unavailablePreview}
+      dueDay={dueDay}
+      onSaved={onWork}
+      onDirty={onWorkDirty}
+      onOpenLightbox={messageId => setLightboxId(messageId)}
+      onClose={closeDetails}
+    />}
     {lightboxMessage?.media && <MediaLightbox
       conversationId={id}
       message={lightboxMessage}
@@ -875,6 +1012,31 @@ function LinkedMediaMessage({
   const [saving, setSaving] = useState(false);
   const [savedName, setSavedName] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const autoTriedRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (
+      media.kind !== "image" ||
+      !media.available ||
+      !canDownload ||
+      loaded?.url ||
+      message.previewJpeg ||
+      autoTriedRef.current === message.id
+    )
+      return;
+    autoTriedRef.current = message.id;
+    void onLoadInline(message.id).catch(() => {
+      // Clicking the card opens the lightbox with an explicit retry action.
+    });
+  }, [
+    canDownload,
+    loaded?.url,
+    media.available,
+    media.kind,
+    message.id,
+    message.previewJpeg,
+    onLoadInline,
+  ]);
 
   const label = media.fileName ?? mediaKindLabel(media, zh);
   const summary = mediaMetaSummary(media);
@@ -1068,6 +1230,17 @@ function MediaLightbox({
     if (!loaded?.url) retryLoad();
     else setLoading(false);
   }, [loaded?.url, retryLoad]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
 
   async function saveImage() {
     if (saving) return;
