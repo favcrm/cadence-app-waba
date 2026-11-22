@@ -48,7 +48,21 @@ export const TIMEOUT_STATUS = 504;
 // Refusal codes, not text heuristics, select the UI path.
 function refusal(v: unknown): ApiError {
   if (!object(v) || !exact(v, ["code", "text"]) || typeof v.code !== "string" || typeof v.text !== "string" || v.text.length > 2000) throw invalid();
-  const status = ({ not_found: 404, missing: 404, stale_revision: 409, conflict: 409, unauthorized: 401, forbidden: 403, unavailable: 503 } as Record<string, number>)[v.code] ?? 400;
+  const status = ({
+    not_found: 404,
+    missing: 404,
+    stale_revision: 409,
+    conflict: 409,
+    window_closed: 409,
+    stale_approval: 409,
+    owner_required: 409,
+    facts_changed: 409,
+    connector_paused: 409,
+    rate_limited: 429,
+    unauthorized: 401,
+    forbidden: 403,
+    unavailable: 503,
+  } as Record<string, number>)[v.code] ?? 400;
   return new ApiError(v.text, status, { code: v.code });
 }
 type ReplyAvailability = "checking" | "blocked" | "verified";

@@ -1,7 +1,7 @@
 ---
 app: waba
 title: WhatsApp Business
-version: '0.3.19'
+version: '0.4.0'
 summary: Use the official WhatsApp Business connection or a test-only linked device for the inbox and owner-approved replies. The app holds no credentials.
 needs:
   connections: []
@@ -111,13 +111,15 @@ Those tools are not shown for linked devices. Old tool URLs open the Inbox.
   WhatsApp Business Account per delivered marketing message.
 
 - **AI agent.** An owner can save copilot or human-only reply mode for
-  the installation. In copilot mode the Inbox offers "Draft with assistant":
+  the installation. In copilot mode on Official API the Inbox offers "Draft with assistant":
   the operator confirms
   the guidance in the host card, the Assistant reads this one
   conversation (last 20 text messages, phone masked) and parks a draft.
-  The draft shows as "Assistant draft" with Insert (fills the composer,
-  never prepares or sends) and Discard; a successful send discards it.
-  Members see the draft read-only. "Automatic replies: unavailable".
+  Parked drafts (`whatsapp.reply.draft`, read/discard via `whatsapp.draft.show` and
+  `whatsapp.draft.discard`) show as "Assistant draft" in both Official API and Linked
+  Device inboxes with Insert (or Copy beside the board composer) and Discard;
+  a successful send discards the Official draft. Members see the draft read-only.
+  "Automatic replies: unavailable".
 
 - **Takeover.** A taken-over conversation shows "Taken over" (FavCRM's AI is
   paused there). "Take over" pauses it; the app also does so just before your
@@ -129,6 +131,50 @@ Those tools are not shown for linked devices. Old tool URLs open the Inbox.
 Members see every page read-only: the host grants them the reads only,
 so the composer, the connect action and every draft, test, send and
 stop control are not shown.
+
+## Agent tools (app_call)
+
+When invoked through `app_call` (hosted UI Chat, Workspace MCP `/mcp/workspace`,
+hosted `cadence mcp-agent`, or `cadence platform call app_call`), every `whatsapp.*`
+operation requires an explicit `provider` (`"linked"` or `"official"`). Cross-mode calls
+are refused (`unsupported_for_provider`) with zero silent fallback.
+
+Workspace agents have WABA tools disabled by default. An owner must explicitly enable the
+opt-in profile tools (`whatsapp_read`, `whatsapp_stage`, `whatsapp_manage`) and, for
+Workspace MCP tokens, grant matching scopes (`whatsapp.read`, `whatsapp.stage`,
+`whatsapp.manage`).
+
+- **Read & reconcile (`whatsapp_read` / `whatsapp.read`):**
+  `whatsapp.status` (available without elevated tier), `whatsapp.conversations.list`,
+  `whatsapp.conversations.show`, `whatsapp.messages`, `whatsapp.reply.status`,
+  `whatsapp.draft.show`, `whatsapp.media.read` (returns bounded metadata, SHA-256, and
+  artifact/media handle — never raw provider URLs), Official catalog/campaign reads
+  (`whatsapp.templates.list`, `whatsapp.template.show`, `whatsapp.template.status`,
+  `whatsapp.broadcasts.list`, `whatsapp.broadcast.show`, `whatsapp.broadcast.estimate`,
+  `whatsapp.broadcast.results`), and `records.list` / `records.show` on `inbox_work` and
+  `inbox_notes`.
+- **Non-sending drafts (`whatsapp_stage` / `whatsapp.stage`):**
+  `whatsapp.reply.draft` and `whatsapp.draft.discard` (both modes), plus Official
+  `whatsapp.broadcast.draft`. Never sends external messages.
+- **Home-staged messaging & handoff (`whatsapp_stage` / `whatsapp.stage`):**
+  `whatsapp.reply.stage` (text plus optional pinned `{ media_ref | artifact_id, sha256 }`;
+  WhatsApp audio forbids non-empty captions) for both modes, and Official
+  `whatsapp.template.stage`, `whatsapp.broadcast.test.stage`, `whatsapp.broadcast.stage`,
+  `whatsapp.broadcast.stop.stage`, and `whatsapp.handoff.stage`. Every staged call creates
+  a Home approval item with immutable target/digest pins and executes once after live owner
+  approval.
+- **Connection lifecycle (`whatsapp_manage` / `whatsapp.manage`):**
+  `whatsapp.connect` (returns an authenticated browser URL only, never raw QR strings or
+  session credentials), Home-staged `whatsapp.start`, `whatsapp.stop` (non-destructive pause),
+  `whatsapp.disconnect` (requires `confirm: true`), and Official `whatsapp.inspect`,
+  `whatsapp.link`, and `whatsapp.rescope`. Live workspace owners can also run lifecycle
+  commands directly via `cadence --org <org> connection whatsapp ...`.
+
+**Safety boundaries:** All inbound WhatsApp contact names and message bodies are untrusted
+data (`message_content_untrusted: true`). Never auto-retry an `uncertain` send or lifecycle
+mutation; reconcile with read-only `whatsapp.reply.status`, `whatsapp.template.status`,
+`whatsapp.status`, or `board_pending_actions`. Raw QR payloads and provider credentials are
+never returned or requested through agent tools.
 
 ## Reply draft workflow
 

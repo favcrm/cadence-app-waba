@@ -3,7 +3,8 @@ import { validInboxScope,validWorkRef } from "./inboxWork";
 /** Door answers (`agenticos.whatsapp-door.v1`, design §3) as the host relays
  *  them. Reads are display data only: every authority check stays host-side. */
 export interface Status {
-  connected: boolean; displayPhoneNumber: string | null; verifiedName: string | null; wabaId: string | null; phoneNumberId: string | null;
+  connected: boolean; state: string | null; paused: boolean | null;
+  displayPhoneNumber: string | null; verifiedName: string | null; wabaId: string | null; phoneNumberId: string | null;
   webhook: { subscribed: boolean | null; status: string | null; error: string | null; fields: string[] } | null; observedAt: string | null;
 }
 export interface ConnectSession { url: string; expiresAt: string | null }
@@ -59,7 +60,10 @@ export function parseStatus(v: unknown): Status {
   if (typeof d.connected !== "boolean") bad();
   const w = obj(d.webhook) ? d.webhook : null;
   return {
-    connected: d.connected, displayPhoneNumber: str(d.displayPhoneNumber), verifiedName: str(d.verifiedName), wabaId: str(d.wabaId), phoneNumberId: str(d.phoneNumberId),
+    connected: d.connected,
+    state: str(d.state),
+    paused: typeof d.paused === "boolean" ? d.paused : null,
+    displayPhoneNumber: str(d.displayPhoneNumber), verifiedName: str(d.verifiedName), wabaId: str(d.wabaId), phoneNumberId: str(d.phoneNumberId),
     webhook: w && { subscribed: typeof w.subscribed === "boolean" ? w.subscribed : null, status: str(w.status), error: str(w.error), fields: Array.isArray(w.fields) ? w.fields.filter((f): f is string => typeof f === "string") : [] },
     observedAt: str(d.observedAt),
   };
@@ -219,6 +223,18 @@ const REFUSALS: Record<string, string> = {
   test_limit: "Test limit reached: up to 5 test sends per 24 hours.",
   invalid_request: "The host refused this request as invalid. Check the fields and try again.",
   facts_changed: "The takeover changed since this card opened. Check the conversation before trying again.",
+  window_closed: "The 24-hour reply window is closed. Send an approved template instead.",
+  stale_approval: "This approval expired before it was sent. Review and confirm again.",
+  owner_required: "Only a workspace owner can perform this WhatsApp action.",
+  connector_paused: "Official WhatsApp is paused for this workspace. Resume it before sending.",
+  unsupported_for_provider: "This operation is not supported for the selected WhatsApp mode.",
+  session_stopped: "The linked WhatsApp session is stopped. Start it in Settings or via CLI.",
+  reauthorization_required: "The linked WhatsApp session needs re-pairing in workspace account settings.",
+  already_connected: "This WhatsApp connection is already active.",
+  not_connected: "WhatsApp is not connected for this workspace.",
+  attachment_too_large: "This attachment exceeds the WhatsApp media size limit.",
+  unsupported_attachment: "This attachment type is not supported for WhatsApp.",
+  rate_limited: "Too many WhatsApp requests right now. Try again in a moment.",
   favcrm_unavailable: "FavCRM is not answering right now. Try again in a moment.",
   favcrm_not_bound: "This workspace is not connected to FavCRM. Connect it, then try again.",
   not_granted: "Linked-device access is not enabled. Ask a platform administrator to grant access.",

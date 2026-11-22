@@ -93,13 +93,42 @@ function ManualLink({ link, linked }: { link: ConnectSession; linked: boolean })
   </div>;
 }
 
+function linkedStateLabel(state: string | null, connected: boolean, zh: boolean): string {
+  switch (state) {
+    case "connected": return zh ? "已連線" : "Connected";
+    case "connecting": return zh ? "正在連線" : "Connecting";
+    case "pairing": return zh ? "等待配對（二維碼）" : "Waiting for QR pairing";
+    case "stopped": return zh ? "已停止" : "Stopped";
+    case "reauthorization_required": return zh ? "需要重新連結" : "Re-linking required";
+    case "disconnected": return zh ? "已中斷連線" : "Disconnected";
+    case "idle": return zh ? "未啟動" : "Idle";
+    default: return connected ? (zh ? "已連線" : "Connected") : (zh ? "未連線" : "Not connected");
+  }
+}
+
 function StatusCard({ status, linked, zh }: { status: Status; linked: boolean; zh: boolean }) {
   const title = status.connected ? (zh ? "已連線" : "Connected") : (zh ? "未連線" : "Not connected");
-  if (linked) return <p className="waba-linked-status" data-connected={String(status.connected)}><strong>{title}</strong></p>;
+  if (linked) {
+    const label = linkedStateLabel(status.state, status.connected, zh);
+    return <>
+      <p className="waba-linked-status" data-connected={String(status.connected)} data-state={status.state ?? undefined}>
+        <strong>{label}</strong>
+      </p>
+      {status.state === "stopped" && <Notice state="stopped">{zh
+        ? "已連結裝置工作階段已停止。請在工作區帳戶設定開啟，或執行 cadence connection whatsapp start --provider linked。"
+        : "The linked device session is stopped. Open workspace account settings or run cadence connection whatsapp start --provider linked."}</Notice>}
+      {status.state === "reauthorization_required" && <Notice state="warning">{zh
+        ? "已連結裝置需要重新掃描二維碼配對，請開啟工作區帳戶設定。"
+        : "The linked device session needs re-pairing with a fresh QR code in workspace account settings."}</Notice>}
+    </>;
+  }
   const hook = status.webhook;
   const health = !hook ? "Unknown" : hook.subscribed === true ? (hook.error ? "Subscribed, with errors" : "Healthy") : hook.subscribed === false ? "Not subscribed" : "Unknown";
-  return <div className="waba-card" data-connected={String(status.connected)}>
+  return <div className="waba-card" data-connected={String(status.connected)} data-paused={status.paused === true ? "true" : undefined}>
     <h3>{title}</h3>
+    {status.paused === true && <Notice state="paused">{zh
+      ? "官方 WhatsApp 已被工作區覆蓋層暫停。可執行 cadence connection whatsapp start --provider official，或透過擁有人核准的 whatsapp.start 恢復。"
+      : "Official WhatsApp is paused for this workspace. Resume it via cadence connection whatsapp start --provider official or an owner-approved whatsapp.start action."}</Notice>}
     {status.connected ? <Detail label="WhatsApp connection" items={[
       { key: "number", term: "Number", value: status.displayPhoneNumber ?? "—" },
       { key: "business", term: "Business name", value: status.verifiedName ?? "—" },

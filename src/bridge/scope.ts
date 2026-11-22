@@ -66,7 +66,10 @@ export function acceptPush(p: Record<string, unknown>): void {
   if (!obj(p.installation) || !exact(p.installation, ["install_id", "name", "title", "version", "digest", "summary"]) || p.installation.install_id !== p.install_id || p.installation.digest !== p.digest || p.installation.name !== "waba" || !["title", "version", "summary"].every(k => typeof (p.installation as Record<string, unknown>)[k] === "string") || (p.contexts !== undefined && (!Array.isArray(p.contexts) || !p.contexts.every(c => obj(c) && exact(c, ["id", "label"]) && routeId(c.id) && typeof c.label === "string")))) invalid();
   if (p.read_observations !== undefined && (!Array.isArray(p.read_observations) || p.read_observations.length > 16)) invalid();
   if (snapshot && (snapshot.scope.installId !== p.install_id || snapshot.digest !== p.digest)) invalid();
-  snapshot = { scope: { installId: p.install_id as string, digest: p.digest as string }, digest: p.digest as string, actions: p.actions as string[], route: parseRoute(p.route), presentationLocale: p.presentation_locale === "zh-TW" ? "zh-TW" : "en" };
+  // Preserve DisplayScope object identity across pushes for the same mount
+  // so [scope] mount effects do not re-run non-quietly on host pushes.
+  const scope = snapshot ? snapshot.scope : { installId: p.install_id as string, digest: p.digest as string };
+  snapshot = { scope, digest: p.digest as string, actions: p.actions as string[], route: parseRoute(p.route), presentationLocale: p.presentation_locale === "zh-TW" ? "zh-TW" : "en" };
   pushes++; error = null; notify();
 }
 export function assertCurrentScope(scope: DisplayScope): void {

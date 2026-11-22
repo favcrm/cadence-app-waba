@@ -18,5 +18,8 @@ export default function AiAgent({ mode, editable, busy, onMode }: { mode: Copilo
     </Field>
     {busy ? <p className="waba-muted" role="status">{zh ? "正在儲存…" : "Saving…"}</p> : !editable &&
       <p className="waba-muted">{zh ? "只有工作區擁有人可更改模式。" : "Only a workspace owner can change the mode."}</p>}
+    <p className="waba-muted">{zh
+      ? "工作區代理僅在代理設定檔工具明確開啟 whatsapp_read、whatsapp_stage 或 whatsapp_manage 時才可存取 WhatsApp；所有對外傳送與連線變更均須工作區擁有人在首頁核准。"
+      : "Workspace agents can access WhatsApp only when whatsapp_read, whatsapp_stage, or whatsapp_manage is explicitly enabled in agent profile tools. Every external send and connection change requires workspace owner approval in Home."}</p>
   </section>;
 }
