@@ -25,6 +25,7 @@ built on the host's pinned screen-ui SDK.
 - **Overlay inset acknowledgement (`0.3.13`).** Replaces the 0.3.12 preflight candidate. The app acknowledges each current overlay inset only after committing conversation padding and preserving the reader's scroll position; compatible boards limit the dock to the acknowledged space.
 - **Older message scroll (`0.3.14`).** Loading older rows preserves the reader's position as the dock resizes. Jump to latest takes precedence while an older page is still loading.
 - **Floating reply card (`0.3.17`).** The history keeps its full viewport and scrolls behind the board-owned card. Only the message list gets trailing padding equal to the measured dock plus breathing room. Loading older messages or opening narrow Contact Details preserves the reading position. Earlier boards keep the in-flow composer.
+- **Linked inbound media (`0.3.18`).** On a compatible host (`wa_media_download=1` / `screen-whatsapp-media.v1`), linked-device messages render inbound and outbound media metadata, captions, explicit unavailable reasons, full-resolution image lightbox, inline voice/audio and video playback via in-memory `blob:` URLs, and host-mediated file downloads while preserving JPEG thumbnail fallbacks on older hosts.
 
 Plan: cadence CAD-1465 (`cad1465-waba-plan-20261018.md`).
 

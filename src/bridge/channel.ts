@@ -2,6 +2,43 @@ import { ApiError } from "@cadence/screen-ui";
 import { acceptComposeState,acceptPush,clearScope } from "./scope";
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: unknown) => void; timer: ReturnType<typeof setTimeout> | undefined; kind: "call" | "slot" };
+export type DownloadedWhatsAppMedia = { bytes: ArrayBuffer; mimeType: string; fileName: string | null; sha256: string };
+export type SavedWhatsAppMedia = { saved: true; mimeType: string; fileName: string; sha256: string };
+type MediaPending =
+  | { kind: "inline"; resolve: (v: DownloadedWhatsAppMedia) => void; reject: (e: unknown) => void; timer: ReturnType<typeof setTimeout> }
+  | { kind: "download"; resolve: (v: SavedWhatsAppMedia) => void; reject: (e: unknown) => void; timer: ReturnType<typeof setTimeout> };
+const LINKED_MEDIA_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const LINKED_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
+const SHA256_RE = /^[0-9a-f]{64}$/;
+const SAFE_MEDIA_MIMES = new Set<string>([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "video/mp4",
+  "video/webm",
+  "video/3gpp",
+  "video/quicktime",
+  "audio/mpeg",
+  "audio/ogg",
+  "audio/mp4",
+  "audio/aac",
+  "audio/wav",
+  "audio/webm",
+  "application/pdf",
+  "text/plain",
+  "text/csv",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+]);
+function printableBounded(value: unknown, maxLen: number): value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length > maxLen) return false;
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code < 32 || code === 127) return false;
+  }
+  return true;
+}
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 export function exact(v: Record<string, unknown>, keys: readonly string[]): boolean { return Object.keys(v).every(k => keys.includes(k)); }
 const bytes = (v: unknown) => new TextEncoder().encode(JSON.stringify(v)).length;
@@ -24,6 +61,7 @@ class Channel {
   private replyAvailabilitySupported = false;
   private replyLayoutSupported = false;
   private replyOverlaySupported = false;
+  private mediaDownloadSupported = false;
   private replyInset: ReplyInset | null = null;
   private acknowledgedInset: ReplyInset | null = null;
   private lastLayout: string | null = null;
@@ -73,6 +111,40 @@ class Channel {
     this.announceReplyAvailability();
   }
   private pending = new Map<string, Pending>();
+  private mediaPending = new Map<string, MediaPending>();
+  get hostMediaDownload(): boolean { return this.mediaDownloadSupported && !this.retired; }
+  downloadMedia(conversationId: string, messageId: string): Promise<DownloadedWhatsAppMedia> {
+    return this.requestMedia("inline", conversationId, messageId);
+  }
+  saveMedia(conversationId: string, messageId: string): Promise<SavedWhatsAppMedia> {
+    return this.requestMedia("download", conversationId, messageId);
+  }
+  private requestMedia(kind: "inline", conversationId: string, messageId: string): Promise<DownloadedWhatsAppMedia>;
+  private requestMedia(kind: "download", conversationId: string, messageId: string): Promise<SavedWhatsAppMedia>;
+  private requestMedia(kind: "inline" | "download", conversationId: string, messageId: string): Promise<DownloadedWhatsAppMedia | SavedWhatsAppMedia> {
+    if (!this.port || this.retired || !this.mediaDownloadSupported) {
+      return Promise.reject(new ApiError("Media download bridge is unavailable.", 503, { code: "unavailable" }));
+    }
+    if (!printableBounded(conversationId, 256) || !printableBounded(messageId, 256)) {
+      return Promise.reject(new ApiError("Invalid WhatsApp media identifier.", 400, { code: "invalid_request" }));
+    }
+    if (this.mediaPending.size >= 4) {
+      return Promise.reject(new ApiError("Too many downloads in progress.", 429, { code: "busy" }));
+    }
+    const id = `waba-${++this.serial}`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.mediaPending.delete(id);
+        reject(new ApiError("Media download timed out.", TIMEOUT_STATUS, { code: "timeout" }));
+      }, 60000);
+      if (kind === "inline") {
+        this.mediaPending.set(id, { kind: "inline", resolve: resolve as (v: DownloadedWhatsAppMedia) => void, reject, timer });
+      } else {
+        this.mediaPending.set(id, { kind: "download", resolve: resolve as (v: SavedWhatsAppMedia) => void, reject, timer });
+      }
+      this.port!.postMessage({ v: 2, op: "whatsapp-media", id, conversation_id: conversationId, message_id: messageId, disposition: kind });
+    });
+  }
   start(): void {
     if (this.port || this.retired) return;
     const node = document.getElementById("cadence-screen-boot");
@@ -93,10 +165,12 @@ class Channel {
     this.replyAvailabilitySupported = this.composeSupported && new URLSearchParams(window.location.search).get("wa_compose_availability") === "1";
     this.replyLayoutSupported = this.replyAvailabilitySupported && new URLSearchParams(window.location.search).get("wa_compose_layout") === "1";
     this.replyOverlaySupported = this.replyLayoutSupported && new URLSearchParams(window.location.search).get("wa_compose_inset_ack") === "1";
+    this.mediaDownloadSupported = new URLSearchParams(window.location.search).get("wa_media_download") === "1";
     pair.port1.postMessage({ v: 1, op: "ready", accepts: ["screen.v2", "screen-records.v1", "screen-locale.v1",
       ...(this.composeSupported ? ["screen-whatsapp-compose.v1"] : []),
       ...(this.replyAvailabilitySupported ? ["screen-whatsapp-reply-availability.v1"] : []),
-      ...(this.replyLayoutSupported ? [this.replyOverlaySupported ? "screen-whatsapp-reply-layout.v2" : "screen-whatsapp-reply-layout.v1"] : [])] });
+      ...(this.replyLayoutSupported ? [this.replyOverlaySupported ? "screen-whatsapp-reply-layout.v2" : "screen-whatsapp-reply-layout.v1"] : []),
+      ...(this.mediaDownloadSupported ? ["screen-whatsapp-media.v1"] : [])] });
     window.addEventListener("pagehide", () => this.retire(new ApiError("WhatsApp mount retired", 403)), { once: true });
   }
   request(kind: "call" | "slot", verb: string, args: Record<string, unknown>): Promise<unknown> {
@@ -145,6 +219,47 @@ class Channel {
       }
       return;
     }
+    if (data.op === "whatsapp-media-reply") {
+      if (!this.mediaDownloadSupported || typeof data.id !== "string") throw invalid();
+      const m = this.mediaPending.get(data.id);
+      if (!m) throw invalid();
+      if (data.ok === false) {
+        if (!exact(data, ["v", "op", "id", "ok", "refusal"])) throw invalid();
+        const err = refusal(data.refusal);
+        clearTimeout(m.timer);
+        this.mediaPending.delete(data.id);
+        m.reject(err);
+        if (err.code === "unauthorized" || err.code === "forbidden") this.retire(err);
+        return;
+      }
+      if (data.ok !== true) throw invalid();
+      if (m.kind === "download") {
+        if (
+          !exact(data, ["v", "op", "id", "ok", "saved", "mime_type", "file_name", "sha256"]) ||
+          data.saved !== true ||
+          typeof data.mime_type !== "string" || !SAFE_MEDIA_MIMES.has(data.mime_type) ||
+          !printableBounded(data.file_name, 200) ||
+          typeof data.sha256 !== "string" || !SHA256_RE.test(data.sha256)
+        ) throw invalid();
+        clearTimeout(m.timer);
+        this.mediaPending.delete(data.id);
+        m.resolve({ saved: true, mimeType: data.mime_type, fileName: data.file_name, sha256: data.sha256 });
+        return;
+      }
+      if (
+        !exact(data, ["v", "op", "id", "ok", "bytes", "mime_type", "file_name", "sha256"]) ||
+        !(data.bytes instanceof ArrayBuffer) ||
+        typeof data.mime_type !== "string" || !SAFE_MEDIA_MIMES.has(data.mime_type) ||
+        (data.file_name !== null && !printableBounded(data.file_name, 200)) ||
+        typeof data.sha256 !== "string" || !SHA256_RE.test(data.sha256)
+      ) throw invalid();
+      const limit = data.mime_type.startsWith("image/") ? LINKED_MEDIA_MAX_IMAGE_BYTES : LINKED_MEDIA_MAX_BYTES;
+      if (data.bytes.byteLength < 1 || data.bytes.byteLength > limit) throw invalid();
+      clearTimeout(m.timer);
+      this.mediaPending.delete(data.id);
+      m.resolve({ bytes: data.bytes, mimeType: data.mime_type, fileName: data.file_name, sha256: data.sha256 });
+      return;
+    }
     if (data.op !== "reply" && data.op !== "slot-state") throw invalid();
     if (bytes(data) > 1049600 || typeof data.id !== "string") throw invalid();
     const p = this.pending.get(data.id);
@@ -182,7 +297,10 @@ class Channel {
     this.acknowledgedInset = null;
     this.port?.close(); this.port = null;
     for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(error); }
-    this.pending.clear(); clearScope(error.message);
+    this.pending.clear();
+    for (const m of this.mediaPending.values()) { clearTimeout(m.timer); m.reject(error); }
+    this.mediaPending.clear();
+    clearScope(error.message);
     this.announceReplyAvailability();
   }
 }

@@ -1,5 +1,5 @@
 import { ApiError,Button,EmptyState,ErrorNotice,Field,Loading,Notice } from "@cadence/screen-ui";
-import { Fragment,useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState,useSyncExternalStore,type ReactNode } from "react";
+import { Fragment,useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState,useSyncExternalStore,type ReactNode,type RefObject } from "react";
 import { channel } from "../../bridge/channel";
 import { patchRoute } from "../../bridge/route";
 import { routable,useOnPush,useScope,type DisplayScope } from "../../bridge/scope";
@@ -8,7 +8,7 @@ import ContactWork,{ threadStateLabel } from "./ContactWork";
 import { effectiveThreadState,listThreadWork,validWorkRef,type ThreadState,type ThreadWork } from "./inboxWork";
 import { useWorkBrowse } from "./useWorkBrowse";
 import type { Recipient } from "./Templates";
-import { declinedReason,errorText,parseConversation,parseConversations,parseDraft,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Draft,type Message,type ReplyState,type ReplyStatus } from "./door";
+import { declinedReason,errorText,formatMediaBytes,formatMediaDuration,parseConversation,parseConversations,parseDraft,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Draft,type LinkedMediaInfo,type Message,type ReplyState,type ReplyStatus } from "./door";
 
 const PAGE = 25;
 /** What the copilot may show, derived from the host-granted actions (members get the draft read-only). */
@@ -362,6 +362,52 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   }, [onDirtyChange]);
   const detailsButton = useRef<HTMLButtonElement>(null);
   const closeDetailsButton = useRef<HTMLButtonElement>(null);
+  const closeLightboxButton = useRef<HTMLButtonElement>(null);
+  type LoadedInlineMedia = { url: string; mimeType: string; fileName: string | null };
+  const mediaMounted = useRef(true);
+  const mediaUrls = useRef<Map<string, string>>(new Map());
+  const loadedMediaRef = useRef<Map<string, LoadedInlineMedia>>(new Map());
+  const inlineInFlight = useRef<Map<string, Promise<LoadedInlineMedia>>>(new Map());
+  const [loadedMedia, setLoadedMedia] = useState<Map<string, LoadedInlineMedia>>(() => new Map());
+  const [lightboxId, setLightboxId] = useState<string | null>(null);
+  const hostMediaDownload = useSyncExternalStore(channel.subscribeReplyAvailability, () => channel.hostMediaDownload);
+  useEffect(() => {
+    mediaMounted.current = true;
+    const urls = mediaUrls.current;
+    const loaded = loadedMediaRef.current;
+    return () => {
+      mediaMounted.current = false;
+      for (const url of urls.values()) URL.revokeObjectURL(url);
+      urls.clear();
+      loaded.clear();
+    };
+  }, []);
+  const loadInlineMedia = useCallback(async (messageId: string): Promise<LoadedInlineMedia> => {
+    const cached = loadedMediaRef.current.get(messageId);
+    if (cached && cached.url) return cached;
+    const active = inlineInFlight.current.get(messageId);
+    if (active) return active;
+    const promise = channel.downloadMedia(id, messageId).then(downloaded => {
+      if (!mediaMounted.current) {
+        return { url: "", mimeType: downloaded.mimeType, fileName: downloaded.fileName };
+      }
+      const prev = mediaUrls.current.get(messageId);
+      if (prev) URL.revokeObjectURL(prev);
+      const url = URL.createObjectURL(new Blob([downloaded.bytes], { type: downloaded.mimeType }));
+      mediaUrls.current.set(messageId, url);
+      const entry: LoadedInlineMedia = { url, mimeType: downloaded.mimeType, fileName: downloaded.fileName };
+      loadedMediaRef.current.set(messageId, entry);
+      setLoadedMedia(current => new Map(current).set(messageId, entry));
+      return entry;
+    }).finally(() => {
+      inlineInFlight.current.delete(messageId);
+    });
+    inlineInFlight.current.set(messageId, promise);
+    return promise;
+  }, [id]);
+  useLayoutEffect(() => {
+    if (lightboxId !== null) closeLightboxButton.current?.focus({ preventScroll: true });
+  }, [lightboxId]);
   function jumpToLatest() {
     const pane = timeline.current;
     if (!pane) return;
@@ -530,7 +576,8 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const subtitle = group ? (zh ? "WhatsApp 群組" : "WhatsApp group") : phone ?? phoneUnavailable(zh);
   const detailsLabel = zh ? (group ? "群組詳情" : "聯絡人詳情") : (group ? "Group details" : "Contact details");
   const identity = phone && phone !== title ? `${title}${zh ? "、" : ", "}${phone}` : title;
-  const photos = details ? ordered.filter(m => m.previewJpeg !== null) : [];
+  const photos = details ? ordered.filter(m => m.previewJpeg !== null || (m.media?.kind === "image" && m.media.available)) : [];
+  const lightboxMessage = lightboxId ? ordered.find(m => m.id === lightboxId) ?? null : null;
   const locale = zh ? "zh" : "en";
   const day = dayFormat[locale], time = timeFormat[locale];
   const loadOlder = (cursor: string) => {
@@ -538,7 +585,10 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
     void read(cursor);
   };
   return <article className="waba-conversation" data-details={details} aria-labelledby="waba-thread-title" onKeyDown={e => {
-    if (details && e.key === "Escape" && !e.defaultPrevented) { e.preventDefault(); closeDetails(); }
+    if (e.key === "Escape" && !e.defaultPrevented) {
+      if (lightboxId !== null) { e.preventDefault(); setLightboxId(null); return; }
+      if (details) { e.preventDefault(); closeDetails(); }
+    }
   }}>
     <header className="waba-thread-head">
       <Button size="sm" variant="ghost" className="waba-back" disabled={replyDirty} onClick={onBack}>{zh ? "返回" : "Back"}</Button>
@@ -590,9 +640,21 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
                       {date && (previous === null || day.format(previous) !== date) && <li className="waba-date">{date}</li>}
                       <li className="waba-message" data-direction={m.direction === "outbound" ? "outbound" : "inbound"}>
                         {scope.provider === "linked" && m.type === "unsupported"
-                          ? m.previewJpeg
-                            ? <PhotoPreview key={m.previewJpeg} jpeg={m.previewJpeg} label={zh ? "相片預覽" : "Photo preview"} unavailable={unavailablePreview} />
-                            : <p className="waba-muted">{unavailablePreview}</p>
+                          ? m.media
+                            ? <LinkedMediaMessage
+                                conversationId={id}
+                                message={m}
+                                media={m.media}
+                                loaded={loadedMedia.get(m.id) ?? null}
+                                canDownload={hostMediaDownload}
+                                zh={zh}
+                                unavailable={unavailablePreview}
+                                onLoadInline={loadInlineMedia}
+                                onOpenLightbox={() => setLightboxId(m.id)}
+                              />
+                            : m.previewJpeg
+                              ? <PhotoPreview key={m.previewJpeg} jpeg={m.previewJpeg} label={zh ? "相片預覽" : "Photo preview"} unavailable={unavailablePreview} />
+                              : <p className="waba-muted">{unavailablePreview}</p>
                           : <p>{m.body ?? (m.type ? `[${m.type}]` : "")}</p>}
                         {(at !== null || m.status) && <div className="waba-message-meta waba-muted">{at !== null && <time dateTime={m.createdAt!}>{time.format(at)}</time>}{m.status && <span>{m.status}</span>}</div>}
                       </li>
@@ -626,11 +688,34 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
         {details && workLink && <ContactWork key={workLink.ref} scope={scope} link={workLink} zh={zh} onSaved={onWork} onDirty={onWorkDirty} />}
         <section aria-label={zh ? "已分享的媒體" : "Shared media"}>
           <h4>{zh ? "已分享的媒體" : "Shared media"}</h4>
-          {photos.length ? <ul className="waba-contact-media">{photos.map(m => <li key={m.id}><PhotoPreview jpeg={m.previewJpeg!} label={zh ? "相片預覽" : "Photo preview"} unavailable={unavailablePreview} /></li>)}</ul>
+          {photos.length ? <ul className="waba-contact-media">{photos.map(m => <li key={m.id}>
+            {m.media?.kind === "image" && m.media.available && hostMediaDownload
+              ? <button type="button" className="waba-media-trigger" aria-label={m.media.fileName ?? (zh ? "檢視相片" : "View photo")} onClick={() => setLightboxId(m.id)}>
+                  {loadedMedia.get(m.id)
+                    ? <img className="waba-photo-preview" src={loadedMedia.get(m.id)!.url} alt={m.media.fileName ?? (zh ? "相片" : "Photo")} loading="lazy" decoding="async" />
+                    : m.previewJpeg
+                    ? <PhotoPreview jpeg={m.previewJpeg} label={zh ? "相片預覽" : "Photo preview"} unavailable={unavailablePreview} />
+                    : <span className="waba-media-tile"><span className="waba-media-badge">IMG</span><span className="waba-media-info"><span className="waba-media-title">{m.media.fileName ?? (zh ? "相片" : "Photo")}</span></span></span>}
+                </button>
+              : m.previewJpeg
+              ? <PhotoPreview jpeg={m.previewJpeg} label={zh ? "相片預覽" : "Photo preview"} unavailable={unavailablePreview} />
+              : <p className="waba-muted">{unavailablePreview}</p>}
+          </li>)}</ul>
             : <p className="waba-muted">{zh ? "已載入的訊息沒有相片預覽。" : "No photo previews in loaded messages."}</p>}
         </section>
       </aside>}
     </div>
+    {lightboxMessage?.media && <MediaLightbox
+      conversationId={id}
+      message={lightboxMessage}
+      media={lightboxMessage.media}
+      loaded={loadedMedia.get(lightboxMessage.id) ?? null}
+      zh={zh}
+      unavailable={unavailablePreview}
+      closeRef={closeLightboxButton}
+      onLoadInline={loadInlineMedia}
+      onClose={() => setLightboxId(null)}
+    />}
   </article>;
 }
 
@@ -638,6 +723,311 @@ function PhotoPreview({ jpeg, label, unavailable }: { jpeg: string; label: strin
   const [failed, setFailed] = useState(false);
   return failed ? <p className="waba-muted">{unavailable}</p>
     : <img className="waba-photo-preview" src={`data:image/jpeg;base64,${jpeg}`} alt={label} loading="lazy" decoding="async" onError={() => setFailed(true)} />;
+}
+
+function mediaBadge(media: LinkedMediaInfo): string {
+  if (media.kind === "image") return "IMG";
+  if (media.kind === "video") return "VID";
+  if (media.kind === "audio") return media.ptt ? "PTT" : "AUD";
+  const mime = media.mimeType.toLowerCase();
+  if (mime === "application/pdf") return "PDF";
+  if (mime.includes("wordprocessingml")) return "DOCX";
+  if (mime.includes("spreadsheetml")) return "XLSX";
+  if (mime.includes("presentationml")) return "PPTX";
+  if (mime === "text/csv") return "CSV";
+  if (mime === "text/plain") return "TXT";
+  return "FILE";
+}
+
+function mediaKindLabel(media: LinkedMediaInfo, zh: boolean): string {
+  if (media.kind === "image") return zh ? "圖片" : "Image";
+  if (media.kind === "video") return zh ? "影片" : "Video";
+  if (media.kind === "audio") return media.ptt ? (zh ? "語音訊息" : "Voice message") : (zh ? "音訊" : "Audio");
+  return zh ? "文件" : "Document";
+}
+
+function mediaMetaSummary(media: LinkedMediaInfo): string {
+  const parts = [
+    formatMediaBytes(media.byteLength),
+    media.width && media.height ? `${media.width}×${media.height}` : null,
+    formatMediaDuration(media.durationSeconds),
+  ].filter((part): part is string => part !== null);
+  return parts.join(" · ");
+}
+
+function unavailableReasonText(reason: LinkedMediaInfo["unavailableReason"], zh: boolean): string {
+  if (reason === "too_large") return zh ? "檔案超過 10 MB 下載限制。" : "Attachment exceeds the 10 MB limit.";
+  if (reason === "unsupported_type") return zh ? "不支援此媒體格式。" : "Unsupported media format.";
+  return zh ? "此訊息無法提供媒體下載。" : "Media is unavailable for this message.";
+}
+
+function LinkedMediaMessage({
+  conversationId,
+  message,
+  media,
+  loaded,
+  canDownload,
+  zh,
+  unavailable,
+  onLoadInline,
+  onOpenLightbox,
+}: {
+  conversationId: string;
+  message: Message;
+  media: LinkedMediaInfo;
+  loaded: { url: string; mimeType: string; fileName: string | null } | null;
+  canDownload: boolean;
+  zh: boolean;
+  unavailable: string;
+  onLoadInline: (messageId: string) => Promise<{ url: string; mimeType: string; fileName: string | null }>;
+  onOpenLightbox: () => void;
+}) {
+  const [loadingInline, setLoadingInline] = useState(false);
+  const [inlineError, setInlineError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [savedName, setSavedName] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const label = media.fileName ?? mediaKindLabel(media, zh);
+  const summary = mediaMetaSummary(media);
+
+  async function playInline() {
+    if (loadingInline) return;
+    setLoadingInline(true);
+    setInlineError(null);
+    try {
+      await onLoadInline(message.id);
+    } catch (e) {
+      setInlineError(errorText(e, zh ? "無法載入媒體。" : "Couldn’t load media."));
+    } finally {
+      setLoadingInline(false);
+    }
+  }
+
+  async function saveFile() {
+    if (saving) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const saved = await channel.saveMedia(conversationId, message.id);
+      setSavedName(saved.fileName);
+    } catch (e) {
+      setSaveError(errorText(e, zh ? "無法下載檔案。" : "Couldn’t save attachment."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const caption = media.caption ? <p className="waba-media-caption">{media.caption}</p> : null;
+
+  if (!media.available) {
+    return <div className="waba-media-card">
+      {message.previewJpeg && <PhotoPreview key={message.previewJpeg} jpeg={message.previewJpeg} label={label} unavailable={unavailable} />}
+      <div className="waba-media-tile">
+        <span className="waba-media-badge">{mediaBadge(media)}</span>
+        <span className="waba-media-info">
+          <span className="waba-media-title">{label}</span>
+          {summary && <span className="waba-media-sub">{summary}</span>}
+        </span>
+      </div>
+      <p className="waba-muted">{unavailableReasonText(media.unavailableReason, zh)}</p>
+      {caption}
+    </div>;
+  }
+
+  if (!canDownload) {
+    return <div className="waba-media-card">
+      {message.previewJpeg
+        ? <PhotoPreview key={message.previewJpeg} jpeg={message.previewJpeg} label={label} unavailable={unavailable} />
+        : <div className="waba-media-tile">
+            <span className="waba-media-badge">{mediaBadge(media)}</span>
+            <span className="waba-media-info">
+              <span className="waba-media-title">{label}</span>
+              {summary && <span className="waba-media-sub">{summary}</span>}
+            </span>
+          </div>}
+      <p className="waba-muted">{zh ? "更新 Cadence 主機板即可檢視或下載完整媒體。" : "Update the Cadence board to view or save full media."}</p>
+      {caption}
+    </div>;
+  }
+
+  if (media.kind === "image") {
+    return <div className="waba-media-card">
+      <button type="button" className="waba-media-trigger" aria-label={media.fileName ? `${zh ? "檢視圖片" : "View image"}: ${media.fileName}` : (zh ? "檢視完整圖片" : "View full image")} onClick={onOpenLightbox}>
+        {loaded?.url
+          ? <img className="waba-photo-preview" src={loaded.url} alt={label} loading="lazy" decoding="async" />
+          : message.previewJpeg
+          ? <PhotoPreview key={message.previewJpeg} jpeg={message.previewJpeg} label={label} unavailable={unavailable} />
+          : <span className="waba-media-tile">
+              <span className="waba-media-badge">IMG</span>
+              <span className="waba-media-info">
+                <span className="waba-media-title">{label}</span>
+                {summary && <span className="waba-media-sub">{summary}</span>}
+              </span>
+            </span>}
+      </button>
+      {summary && !message.previewJpeg && !loaded?.url ? null : summary && <span className="waba-media-sub">{summary}</span>}
+      {caption}
+    </div>;
+  }
+
+  if (media.kind === "audio") {
+    return <div className="waba-media-card">
+      <div className="waba-media-tile">
+        <span className="waba-media-badge">{mediaBadge(media)}</span>
+        <span className="waba-media-info">
+          <span className="waba-media-title">{mediaKindLabel(media, zh)}</span>
+          {summary && <span className="waba-media-sub">{summary}</span>}
+        </span>
+      </div>
+      {loaded?.url
+        ? <audio className="waba-media-audio" controls autoPlay src={loaded.url} />
+        : null}
+      <div className="waba-media-actions">
+        {!loaded?.url && <Button size="sm" loading={loadingInline} onClick={() => { void playInline(); }}>{inlineError ? (zh ? "重試" : "Retry") : (zh ? "播放" : "Play")}</Button>}
+        <Button size="sm" variant="ghost" loading={saving} onClick={() => { void saveFile(); }}>{zh ? "下載" : "Save"}</Button>
+      </div>
+      {savedName && <p className="waba-muted" role="status">{zh ? `已儲存 ${savedName}` : `Saved ${savedName}`}</p>}
+      {inlineError && <ErrorNotice bare>{inlineError}</ErrorNotice>}
+      {saveError && <ErrorNotice bare>{saveError}</ErrorNotice>}
+      {caption}
+    </div>;
+  }
+
+  if (media.kind === "video") {
+    const poster = message.previewJpeg ? `data:image/jpeg;base64,${message.previewJpeg}` : undefined;
+    return <div className="waba-media-card">
+      {loaded?.url
+        ? <video className="waba-media-video" controls playsInline autoPlay poster={poster} src={loaded.url} />
+        : message.previewJpeg
+        ? <PhotoPreview key={message.previewJpeg} jpeg={message.previewJpeg} label={label} unavailable={unavailable} />
+        : <div className="waba-media-tile">
+            <span className="waba-media-badge">VID</span>
+            <span className="waba-media-info">
+              <span className="waba-media-title">{mediaKindLabel(media, zh)}</span>
+              {summary && <span className="waba-media-sub">{summary}</span>}
+            </span>
+          </div>}
+      <div className="waba-media-actions">
+        {!loaded?.url && <Button size="sm" loading={loadingInline} onClick={() => { void playInline(); }}>{inlineError ? (zh ? "重試" : "Retry") : (zh ? "播放影片" : "Play video")}</Button>}
+        <Button size="sm" variant="ghost" loading={saving} onClick={() => { void saveFile(); }}>{zh ? "下載" : "Save"}</Button>
+        {summary && !loaded?.url && message.previewJpeg && <span className="waba-media-sub">{summary}</span>}
+      </div>
+      {savedName && <p className="waba-muted" role="status">{zh ? `已儲存 ${savedName}` : `Saved ${savedName}`}</p>}
+      {inlineError && <ErrorNotice bare>{inlineError}</ErrorNotice>}
+      {saveError && <ErrorNotice bare>{saveError}</ErrorNotice>}
+      {caption}
+    </div>;
+  }
+
+  return <div className="waba-media-card">
+    <div className="waba-media-tile">
+      <span className="waba-media-badge">{mediaBadge(media)}</span>
+      <span className="waba-media-info">
+        <span className="waba-media-title">{label}</span>
+        {summary && <span className="waba-media-sub">{summary}</span>}
+      </span>
+    </div>
+    <div className="waba-media-actions">
+      <Button size="sm" loading={saving} onClick={() => { void saveFile(); }}>{saveError ? (zh ? "重試" : "Retry") : (zh ? "下載" : "Download")}</Button>
+    </div>
+    {savedName && <p className="waba-muted" role="status">{zh ? `已下載 ${savedName}` : `Downloaded ${savedName}`}</p>}
+    {saveError && <ErrorNotice bare>{saveError}</ErrorNotice>}
+    {caption}
+  </div>;
+}
+
+function MediaLightbox({
+  conversationId,
+  message,
+  media,
+  loaded,
+  zh,
+  unavailable,
+  closeRef,
+  onLoadInline,
+  onClose,
+}: {
+  conversationId: string;
+  message: Message;
+  media: LinkedMediaInfo;
+  loaded: { url: string; mimeType: string; fileName: string | null } | null;
+  zh: boolean;
+  unavailable: string;
+  closeRef: RefObject<HTMLButtonElement | null>;
+  onLoadInline: (messageId: string) => Promise<{ url: string; mimeType: string; fileName: string | null }>;
+  onClose: () => void;
+}) {
+  const [loading, setLoading] = useState(!loaded?.url);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [savedName, setSavedName] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const retryLoad = useCallback(() => {
+    setLoading(true);
+    setLoadError(null);
+    void onLoadInline(message.id).then(
+      () => setLoading(false),
+      (e: unknown) => {
+        setLoadError(errorText(e, zh ? "無法載入完整相片。" : "Couldn’t load full photo."));
+        setLoading(false);
+      },
+    );
+  }, [message.id, onLoadInline, zh]);
+
+  useEffect(() => {
+    if (!loaded?.url) retryLoad();
+    else setLoading(false);
+  }, [loaded?.url, retryLoad]);
+
+  async function saveImage() {
+    if (saving) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const res = await channel.saveMedia(conversationId, message.id);
+      setSavedName(res.fileName);
+    } catch (e) {
+      setSaveError(errorText(e, zh ? "無法下載相片。" : "Couldn’t save photo."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const title = media.fileName ?? (zh ? "相片" : "Photo");
+  const summary = mediaMetaSummary(media);
+  return <div className="waba-lightbox-backdrop" role="dialog" aria-modal="true" aria-labelledby="waba-lightbox-title" onClick={e => {
+    if (e.target === e.currentTarget) onClose();
+  }} onKeyDown={e => {
+    if (e.key === "Escape") { e.preventDefault(); onClose(); }
+  }}>
+    <div className="waba-lightbox">
+      <header className="waba-head">
+        <div>
+          <h3 id="waba-lightbox-title">{title}</h3>
+          {summary && <p className="waba-media-sub">{summary}</p>}
+        </div>
+        <button ref={closeRef} type="button" className="btn" onClick={onClose}>{zh ? "關閉" : "Close"}</button>
+      </header>
+      <div className="waba-lightbox-body">
+        {loaded?.url
+          ? <img className="waba-lightbox-img" src={loaded.url} alt={title} />
+          : message.previewJpeg
+          ? <PhotoPreview jpeg={message.previewJpeg} label={title} unavailable={unavailable} />
+          : null}
+        {loading && <Loading>{zh ? "正在載入完整相片…" : "Loading full image…"}</Loading>}
+        {loadError && <ErrorNotice onRetry={retryLoad}>{loadError}</ErrorNotice>}
+      </div>
+      <footer className="waba-lightbox-foot">
+        <div>{media.caption && <p className="waba-media-caption">{media.caption}</p>}
+          {savedName && <p className="waba-muted" role="status">{zh ? `已儲存 ${savedName}` : `Saved ${savedName}`}</p>}
+          {saveError && <ErrorNotice bare>{saveError}</ErrorNotice>}
+        </div>
+        <Button size="sm" loading={saving} onClick={() => { void saveImage(); }}>{zh ? "下載原圖" : "Save"}</Button>
+      </footer>
+    </div>
+  </div>;
 }
 
 function Brief({ scope, id, canOpen }: { scope: DisplayScope; id: string; canOpen: boolean }) {
