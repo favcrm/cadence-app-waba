@@ -7,6 +7,7 @@ import { serviceCall,serviceSlot } from "../../bridge/services";
 import ContactDrawer,{ threadStateLabel } from "./ContactDrawer";
 import { dueLabel,effectiveThreadState,listThreadWork,validWorkRef,type ThreadState,type ThreadWork } from "./inboxWork";
 import { useWorkBrowse } from "./useWorkBrowse";
+import { useLivePoll } from "./useLivePoll";
 import type { Recipient } from "./Templates";
 import { declinedReason,errorText,formatMediaBytes,formatMediaDuration,parseConversation,parseConversations,parseDraft,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Draft,type LinkedMediaInfo,type Message,type ReplyState,type ReplyStatus } from "./door";
 
@@ -15,8 +16,81 @@ const PAGE = 25;
 export interface Assist { show: boolean; brief: boolean; open: boolean; discard: boolean }
 /** Takeover actions the host granted; the banner itself is shown to everyone. */
 export interface Handoff { set: boolean; release: boolean }
-const DRAFT_POLL_MS = 5000;
+const LIVE_POLL_MS = 5000;
 type Load<T> = { state: "loading" } | { state: "ok"; value: T } | { state: "failed"; text: string };
+
+function sameMedia(a: LinkedMediaInfo | null, b: LinkedMediaInfo | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.kind === b.kind &&
+    a.mimeType === b.mimeType &&
+    a.fileName === b.fileName &&
+    a.byteLength === b.byteLength &&
+    a.width === b.width &&
+    a.height === b.height &&
+    a.durationSeconds === b.durationSeconds &&
+    a.ptt === b.ptt &&
+    a.caption === b.caption &&
+    a.available === b.available &&
+    a.unavailableReason === b.unavailableReason
+  );
+}
+
+function sameConversationRow(a: ConversationRow, b: ConversationRow): boolean {
+  if (a === b) return true;
+  return (
+    a.conversationId === b.conversationId &&
+    a.contact.name === b.contact.name &&
+    a.contact.phone === b.contact.phone &&
+    (a.lastMessage === b.lastMessage ||
+      (!!a.lastMessage &&
+        !!b.lastMessage &&
+        a.lastMessage.direction === b.lastMessage.direction &&
+        a.lastMessage.body === b.lastMessage.body &&
+        a.lastMessage.createdAt === b.lastMessage.createdAt)) &&
+    a.unreadCount === b.unreadCount &&
+    a.replyMode === b.replyMode &&
+    a.freeformUntil === b.freeformUntil &&
+    (a.work === b.work ||
+      (!!a.work &&
+        !!b.work &&
+        a.work.ref === b.work.ref &&
+        a.work.inboundVersion === b.work.inboundVersion))
+  );
+}
+
+function sameConversationRows(a: ConversationRow[], b: ConversationRow[]): boolean {
+  return a.length === b.length && a.every((row, i) => sameConversationRow(row, b[i]));
+}
+
+function sameConversation(a: Conversation, b: Conversation): boolean {
+  return (
+    sameConversationRow(a, b) &&
+    a.status === b.status &&
+    a.lastInboundAt === b.lastInboundAt &&
+    a.handoffAt === b.handoffAt
+  );
+}
+
+function sameMessage(a: Message, b: Message): boolean {
+  if (a === b) return true;
+  return (
+    a.id === b.id &&
+    a.direction === b.direction &&
+    a.body === b.body &&
+    a.status === b.status &&
+    a.senderType === b.senderType &&
+    a.createdAt === b.createdAt &&
+    a.type === b.type &&
+    a.previewJpeg === b.previewJpeg &&
+    sameMedia(a.media, b.media)
+  );
+}
+
+function sameMessageRows(a: Message[], b: Message[]): boolean {
+  return a.length === b.length && a.every((row, i) => sameMessage(row, b[i]));
+}
 
 function contactPhone(row: ConversationRow, linked: boolean) {
   if (linked && row.conversationId.endsWith("@g.us")) return null;
@@ -143,10 +217,10 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
     if (newMessage || (selected && !openRow.current?.getClientRects().length)) thread.current?.querySelector<HTMLElement>("h2")?.focus({ preventScroll: true });
     else if (!selected) openRow.current?.focus({ preventScroll: true });
   }, [newMessage, selected]);
-  // `quiet` is a host-push refresh: no loading state, loaded pages kept, errors
-  // leave what is shown in place.
-  const page = useCallback(async (after: string | null, quiet = false) => {
-    if (quiet && foregroundList.current) return;
+  // `quiet` is a host-push or background poll refresh: no loading state, loaded pages
+  // kept, errors leave what is shown in place.
+  const page = useCallback(async (after: string | null, quiet = false): Promise<boolean> => {
+    if (quiet && foregroundList.current) return true;
     const request = ++listRequest.current;
     if (!quiet) { foregroundList.current = true; setList(after ? "more" : "loading"); }
     try {
@@ -155,7 +229,7 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
         () => request === listRequest.current,
         () => { if (!quiet) setList("indexing"); },
       );
-      if (!got) return;
+      if (!got) return true;
       const nextInbox = linked ? got.inboxScope : null;
       const changed = nextInbox !== liveInbox.current;
       if (changed) {
@@ -166,25 +240,40 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
         liveInbox.current = nextInbox;
         setInboxScope(nextInbox); setWork(emptyWorkIndex()); setWorkError(false);
       }
-      setRows(r => changed ? got.rows : after ? [...r, ...got.rows.filter(n => !r.some(o => o.conversationId === n.conversationId))]
-        : quiet ? [...got.rows, ...r.filter(o => !got.rows.some(n => n.conversationId === o.conversationId))] : got.rows);
-      setCursor(c => quiet && c && !changed ? c : got.cursor); setList("ok");
+      setRows(r => {
+        const nextRows = changed ? got.rows : after ? [...r, ...got.rows.filter(n => !r.some(o => o.conversationId === n.conversationId))]
+          : quiet ? [...got.rows, ...r.filter(o => !got.rows.some(n => n.conversationId === o.conversationId))] : got.rows;
+        return sameConversationRows(r, nextRows) ? r : nextRows;
+      });
+      setCursor(c => quiet && c && !changed ? c : got.cursor); setList(l => l === "ok" ? l : "ok");
       if (nextInbox && got.rows.length) {
         const refs = got.rows.flatMap(r => r.work ? [r.work.ref] : []);
         try {
           const records = await listThreadWork(scope, nextInbox, refs);
-          if (request !== listRequest.current) return;
+          if (request !== listRequest.current) return true;
           setWork(previous => {
             const next = { records: new Map(previous.records), checked: new Set(previous.checked) };
-            for (const ref of refs) next.checked.add(ref);
-            for (const record of records) if ((next.records.get(record.ref)?.revision ?? 0) < record.revision) next.records.set(record.ref, record);
-            return next;
+            let workChanged = false;
+            for (const ref of refs) {
+              if (!next.checked.has(ref)) {
+                next.checked.add(ref);
+                workChanged = true;
+              }
+            }
+            for (const record of records) {
+              if ((next.records.get(record.ref)?.revision ?? 0) < record.revision) {
+                next.records.set(record.ref, record);
+                workChanged = true;
+              }
+            }
+            return workChanged ? next : previous;
           });
-          setWorkError(false);
+          setWorkError(e => e ? false : e);
         } catch { if (request === listRequest.current) setWorkError(true); }
       }
+      return true;
     } catch (error) {
-      if (request !== listRequest.current) return;
+      if (request !== listRequest.current) return true;
       if (linked && error instanceof ApiError && error.code === "not_granted") {
         openingRequest.current++;
         liveInbox.current = null;
@@ -192,11 +281,17 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
         setOpening(false); setOpenError(false); setQueue("all"); setRows([]); setCursor(null);
         setWork(emptyWorkIndex()); setWorkError(false); setList("failed");
       } else if (!quiet) setList("failed");
+      return false;
     }
     finally { if (!quiet && request === listRequest.current) foregroundList.current = false; }
   }, [scope, linked]);
   useEffect(() => { void page(null); return () => { listRequest.current++; foregroundList.current = false; }; }, [page]);
   useOnPush(() => page(null, true));
+  useLivePoll({
+    enabled: list === "ok",
+    poll: () => page(null, true),
+    intervalMs: LIVE_POLL_MS,
+  });
   function select(id: string | null, observed: Conversation | null = null) {
     openingRequest.current++;
     setOpening(false); setOpenError(false); setResolved(observed);
@@ -503,18 +598,22 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
     observer.observe(pane);
     return () => observer.disconnect();
   }, []);
-  // `quiet` is a host-push refresh: shown data stays on a failed read, and
-  // messages already loaded stay (newer rows win by id).
-  const show = useCallback(async (quiet = false) => {
+  // `quiet` is a host-push or background poll refresh: shown data stays on a failed
+  // read, and messages already loaded stay (newer rows win by id).
+  const show = useCallback(async (quiet = false): Promise<boolean> => {
     try {
       const next = parseConversation(await serviceCall(scope, "whatsapp.conversations.show", { conversation_id: id }));
       if (next.conversationId !== id) throw new ApiError("The conversation identity changed", 502);
-      setConversation({ state: "ok", value: next });
+      setConversation(c => c.state === "ok" && sameConversation(c.value, next) ? c : { state: "ok", value: next });
+      return true;
     }
-    catch (e) { setConversation(c => quiet && c.state === "ok" ? c : { state: "failed", text: errorText(e, "The conversation could not be read.") }); }
+    catch (e) {
+      setConversation(c => quiet && c.state === "ok" ? c : { state: "failed", text: errorText(e, "The conversation could not be read.") });
+      return false;
+    }
   }, [scope, id]);
-  const read = useCallback(async (after: string | null = null, quiet = false) => {
-    if (quiet && foregroundMessages.current) return;
+  const read = useCallback(async (after: string | null = null, quiet = false): Promise<boolean> => {
+    if (quiet && foregroundMessages.current) return true;
     const request = ++messageRequest.current;
     if (!quiet) {
       foregroundMessages.current = true;
@@ -527,19 +626,35 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
         () => request === messageRequest.current,
         () => setIndexing(true),
       );
-      if (!got) return;
-      setIndexing(false);
+      if (!got) return true;
+      setIndexing(i => i ? false : i);
       // A dock resize can change the scroll extent in the same commit as an
       // older page. Anchor a retained row, not the height including the dock.
       const row = after ? timeline.current?.querySelector<HTMLElement>(".waba-message") : null;
       const previousAnchor = row ? { row, top: row.offsetTop } : undefined;
-      setMessages(m => m.state === "ok" && (after || quiet)
-        ? { state: "ok", value: { rows: after ? [...m.value.rows, ...got.rows.filter(n => !m.value.rows.some(o => o.id === n.id))] : [...got.rows, ...m.value.rows.filter(o => !got.rows.some(n => n.id === o.id))], cursor: quiet ? m.value.cursor : got.cursor, previousAnchor } }
-        : { state: "ok", value: { rows: got.rows, cursor: got.cursor } });
+      setMessages(m => {
+        if (m.state === "ok" && (after || quiet)) {
+          const nextRows = after
+            ? [...m.value.rows, ...got.rows.filter(n => !m.value.rows.some(o => o.id === n.id))]
+            : [...got.rows, ...m.value.rows.filter(o => !got.rows.some(n => n.id === o.id))];
+          if (!after && sameMessageRows(m.value.rows, nextRows)) return m;
+          return {
+            state: "ok",
+            value: {
+              rows: nextRows,
+              cursor: quiet ? m.value.cursor : got.cursor,
+              ...(previousAnchor ? { previousAnchor } : {}),
+            },
+          };
+        }
+        return { state: "ok", value: { rows: got.rows, cursor: got.cursor } };
+      });
+      return true;
     } catch (e) {
-      if (request !== messageRequest.current) return;
+      if (request !== messageRequest.current) return true;
       setIndexing(false);
       setMessages(m => quiet && m.state === "ok" ? m : { state: "failed", text: errorText(e, "Messages could not be read.") });
+      return false;
     }
     finally {
       if (!quiet && request === messageRequest.current) {
@@ -551,17 +666,23 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   const [draft, setDraft] = useState<Draft | null>(null);
   const [inserted, setInserted] = useState<{ text: string; n: number } | null>(null);
   const [assistNote, setAssistNote] = useState<string | null>(null);
-  const readDraft = useCallback(async () => {
-    if (!assist.show) { setDraft(null); return; }
+  const readDraft = useCallback(async (): Promise<boolean> => {
+    if (!assist.show) { setDraft(null); return true; }
     // A failed read keeps what is shown: the chip never invents or drops a draft.
-    try { setDraft(parseDraft(await serviceCall(scope, "whatsapp.draft.show", { conversation_id: id }))); } catch { /* next poll retries */ }
+    try {
+      const nextDraft = parseDraft(await serviceCall(scope, "whatsapp.draft.show", { conversation_id: id }));
+      setDraft(prev => prev === nextDraft || (!!prev && !!nextDraft && prev.draftId === nextDraft.draftId && prev.text === nextDraft.text) ? prev : nextDraft);
+      return true;
+    } catch { return false; /* next poll retries */ }
   }, [scope, id, assist.show]);
   useEffect(() => {
     void readDraft();
-    if (!assist.show) return;
-    const t = setInterval(() => { void readDraft(); }, DRAFT_POLL_MS);
-    return () => clearInterval(t);
-  }, [readDraft, assist.show]);
+  }, [readDraft]);
+  useLivePoll({
+    enabled: assist.show,
+    poll: readDraft,
+    intervalMs: LIVE_POLL_MS,
+  });
   const reload = useCallback(() => { void show(); void read(); void readDraft(); }, [show, read, readDraft]);
   useEffect(() => {
     if (initial?.conversationId === id) { void read(); void readDraft(); } else reload();
@@ -574,7 +695,16 @@ function Thread({ scope, id, initial, inboxScope, work, onWork, canReply, canTem
   }
   // The reply went out: its draft is spent. A failed discard leaves the chip, never a retry loop.
   const onSent = useCallback(() => { if (assist.discard) void discard(); }, [assist.discard, scope, id]);
-  useOnPush(() => Promise.all([show(true), read(null, true)]));
+  const refreshThreadQuiet = useCallback(async (): Promise<boolean> => {
+    const results = await Promise.all([show(true), read(null, true)]);
+    return results[0] && results[1];
+  }, [show, read]);
+  useOnPush(refreshThreadQuiet);
+  useLivePoll({
+    enabled: conversation.state === "ok" || messages.state === "ok",
+    poll: refreshThreadQuiet,
+    intervalMs: LIVE_POLL_MS,
+  });
   const c = conversation.state === "ok" ? conversation.value : null;
   const ordered = useMemo(() => messages.state === "ok"
     ? [...messages.value.rows].sort((a, b) => (stamp(a.createdAt) ?? 0) - (stamp(b.createdAt) ?? 0))
@@ -868,6 +998,31 @@ function LinkedMediaMessage({
   const [saving, setSaving] = useState(false);
   const [savedName, setSavedName] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const autoTriedRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (
+      media.kind !== "image" ||
+      !media.available ||
+      !canDownload ||
+      loaded?.url ||
+      message.previewJpeg ||
+      autoTriedRef.current === message.id
+    )
+      return;
+    autoTriedRef.current = message.id;
+    void onLoadInline(message.id).catch(() => {
+      // Clicking the card opens the lightbox with an explicit retry action.
+    });
+  }, [
+    canDownload,
+    loaded?.url,
+    media.available,
+    media.kind,
+    message.id,
+    message.previewJpeg,
+    onLoadInline,
+  ]);
 
   const label = media.fileName ?? mediaKindLabel(media, zh);
   const summary = mediaMetaSummary(media);
