@@ -1,7 +1,6 @@
 import { Button,Detail,EmptyState,ErrorNotice,Field,Loading,Notice,Select } from "@cadence/screen-ui";
 import { useCallback,useEffect,useRef,useState,type ReactNode } from "react";
-import { patchRoute } from "../../bridge/route";
-import { routable,useOnPush,type DisplayScope } from "../../bridge/scope";
+import { useOnPush,useScope,type DisplayScope } from "../../bridge/scope";
 import { serviceCall,serviceSlot,type Audience } from "../../bridge/services";
 import { declinedReason,errorText,when } from "./door";
 import { bodyIndexes,excluded,parseBroadcast,parseBroadcasts,parseDraft,parseEstimate,parsePrepared,parseResults,parseStop,parseTemplates,sendOutcome,testLimit,valueOk,type Broadcast,type BroadcastRow,type Estimate,type Result,type SendState,type Template } from "./door2";
@@ -15,15 +14,15 @@ interface DraftInput { name: string; templateId: string; parameters: string[]; s
 const EMPTY: DraftInput = { name: "", templateId: "", parameters: [], source: "segment", segmentId: "", accounts: "" };
 const STOPPABLE = ["SCHEDULED", "SENDING", "PARTIALLY_SENT"];
 const BILLING = "Meta charges your WhatsApp Business Account per delivered marketing message.";
-const go = (patch: { view?: "list" | "new"; record_id?: string | null }) => { void patchRoute({ section: "broadcasts", ...patch }).catch(() => undefined); };
 const stats = (s: Record<string, number>) => Object.entries(s).map(([k, v]) => `${k} ${v}`).join(" · ") || "—";
 
-export default function Broadcasts({ scope, rights, routeId: routed, creating }: { scope: DisplayScope; rights: BroadcastRights; routeId: string | null; creating: boolean }) {
+export default function Broadcasts({ scope, rights }: { scope: DisplayScope; rights: BroadcastRights }) {
+  const zh = useScope()?.presentationLocale === "zh-TW";
   const [rows, setRows] = useState<BroadcastRow[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [list, setList] = useState<"loading" | "ok" | "more" | string>("loading");
-  const [local, setLocal] = useState<string | null>(null);
-  const selected = routed ?? local;
+  const [selected, setSelected] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
   // `quiet` is a host-push refresh: no loading state, loaded pages kept, errors
   // leave what is shown in place.
   const page = useCallback(async (after: string | null, quiet = false) => {
@@ -38,34 +37,34 @@ export default function Broadcasts({ scope, rights, routeId: routed, creating }:
   useEffect(() => { void page(null); }, [page]);
   useOnPush(() => page(null, true));
   function select(id: string | null) {
-    if (id === null || routable(id)) { setLocal(null); go({ view: "list", record_id: id }); }
-    else { setLocal(id); go({ view: "list", record_id: null }); }
+    setCreating(false);
+    setSelected(id);
   }
   const saved = (id: string) => { void page(null); select(id); };
   const failed = !["loading", "ok", "more"].includes(list);
   const open = creating || !!selected;
-  return <section className="waba-page waba-split" data-selected={open ? "yes" : "no"} aria-label="Broadcasts">
+  return <section className="waba-page waba-split" data-selected={open ? "yes" : "no"} aria-labelledby="waba-broadcasts-title">
     <div className="waba-list" aria-labelledby="waba-broadcasts-title">
       <header className="waba-head">
-        <h1 id="waba-broadcasts-title">Broadcasts</h1>
-        {rights.draft && <Button size="sm" variant="primary" onClick={() => { setLocal(null); go({ view: "new", record_id: null }); }}>New draft</Button>}
-        <Button size="sm" onClick={() => { void page(null); }} loading={list === "loading"}>Refresh</Button>
+        <h1 id="waba-broadcasts-title" tabIndex={-1}>{zh ? "群發訊息" : "Broadcasts"}</h1>
+        {rights.draft && <Button size="sm" variant="primary" onClick={() => { setSelected(null); setCreating(true); }}>{zh ? "新增草稿" : "New draft"}</Button>}
+        <Button size="sm" onClick={() => { void page(null); }} loading={list === "loading"}>{zh ? "重新整理" : "Refresh"}</Button>
       </header>
-      {list === "loading" && !rows.length ? <Loading>Reading broadcasts…</Loading>
+      {list === "loading" && !rows.length ? <Loading>{zh ? "正在讀取群發訊息…" : "Loading broadcasts…"}</Loading>
         : failed ? <ErrorNotice onRetry={() => { void page(null); }}>{list}</ErrorNotice>
-        : !rows.length ? <EmptyState title="No broadcasts yet" name="broadcasts">{rights.draft ? "Start with a new draft." : "Broadcasts the operator creates appear here."}</EmptyState>
+        : !rows.length ? <EmptyState title={zh ? "沒有群發訊息" : "No broadcasts yet"} name="broadcasts">{rights.draft ? (zh ? "新增草稿以開始。" : "Start with a new draft.") : (zh ? "工作區擁有人建立的群發訊息會在這裏顯示。" : "Broadcasts from your workspace will appear here.")}</EmptyState>
         : <ul className="waba-rows">{rows.map(b => <li key={b.broadcastId}>
-            <button type="button" className="waba-row" aria-current={b.broadcastId === selected ? "true" : undefined} onClick={() => select(b.broadcastId)}>
-              <span className="waba-row-name">{b.name || "Untitled broadcast"}</span>
-              <span className="waba-muted">{statusLabel(b.status)}{b.recipientCount !== null ? ` · ${b.recipientCount} recipients` : ""} · {b.sentAt ? `sent ${when(b.sentAt)}` : b.scheduledAt ? `scheduled ${when(b.scheduledAt)}` : `created ${when(b.createdAt)}`}</span>
+            <button type="button" className="waba-row waba-record-row" aria-current={b.broadcastId === selected ? "true" : undefined} onClick={() => select(b.broadcastId)}>
+              <span className="waba-row-title">{b.name || (zh ? "未命名的群發訊息" : "Untitled broadcast")}</span>
+              <span className="waba-row-last">{statusLabel(b.status)}{b.recipientCount !== null ? (zh ? ` · ${b.recipientCount} 位收件者` : ` · ${b.recipientCount} recipients`) : ""}</span>
             </button>
           </li>)}</ul>}
       {cursor && !failed && <Button size="sm" onClick={() => { void page(cursor); }} loading={list === "more"}>Load more</Button>}
     </div>
     <div className="waba-thread">
-      {creating && rights.draft ? <article className="waba-card"><DraftForm scope={scope} initial={EMPTY} onSaved={saved} onCancel={() => go({ view: "list" })} /></article>
+      {creating && rights.draft ? <article className="waba-card"><DraftForm scope={scope} initial={EMPTY} onSaved={saved} onCancel={() => setCreating(false)} /></article>
         : selected ? <BroadcastDetail key={selected} scope={scope} id={selected} rights={rights} onSaved={saved} onBack={() => select(null)} />
-        : <EmptyState title="Select a broadcast" name="broadcast">Its status, audience and results appear here.</EmptyState>}
+        : <EmptyState title={zh ? "選擇群發訊息" : "Select a broadcast"} name="broadcast">{zh ? "查看對象、狀態及結果。" : "Review its audience, status and results."}</EmptyState>}
     </div>
   </section>;
 }

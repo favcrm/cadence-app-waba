@@ -1,0 +1,30 @@
+{
+  "version": 2,
+  "operations": [
+    {
+      "op": "create_table",
+      "table": "inbox_work",
+      "columns": [
+        { "name": "inbox_scope", "type": "text", "nullable": false, "max_length": 35 },
+        { "name": "thread_ref", "type": "text", "nullable": false, "max_length": 100 },
+        { "name": "display_name", "type": "text", "nullable": true, "max_length": 100 },
+        { "name": "state", "type": "text", "nullable": false, "enum": ["needs_reply", "waiting", "done"] },
+        { "name": "follow_up_on", "type": "text", "nullable": true, "max_length": 10 },
+        { "name": "seen_inbound", "type": "integer", "nullable": false }
+      ]
+    },
+    { "op": "create_index", "table": "inbox_work", "name": "work_scope_ref", "columns": ["inbox_scope", "thread_ref"], "unique": true },
+    { "op": "create_index", "table": "inbox_work", "name": "work_scope_due", "columns": ["inbox_scope", "follow_up_on"], "unique": false },
+    { "op": "create_index", "table": "inbox_work", "name": "work_scope_name", "columns": ["inbox_scope", "display_name"], "unique": false },
+    {
+      "op": "create_table",
+      "table": "inbox_notes",
+      "columns": [
+        { "name": "thread_ref", "type": "text", "nullable": false, "max_length": 100 },
+        { "name": "body", "type": "text", "nullable": false, "max_length": 1000 },
+        { "name": "noted_at", "type": "integer", "nullable": false }
+      ]
+    },
+    { "op": "create_index", "table": "inbox_notes", "name": "notes_ref_time", "columns": ["thread_ref", "noted_at"], "unique": false }
+  ]
+}

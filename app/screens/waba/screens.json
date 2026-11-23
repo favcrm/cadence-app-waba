@@ -16,18 +16,18 @@
     {
       "name": "client.js",
       "media_type": "text/javascript",
-      "size": 84063,
-      "sha256": "sha256:9c9487aead42ec8acc50443fab043f1eac0df25079431838fded0bbd66e41eea"
+      "size": 183386,
+      "sha256": "sha256:af2a5c1a5209e0671017df42dce3ff94e05782075e624fcd13b72301b825367b"
     },
     {
       "name": "waba.css",
       "media_type": "text/css",
-      "size": 26091,
-      "sha256": "sha256:8625e573916bb1a6978dd423bf659dd60a97c956d1391f2071bf4fdb4ec7afd7"
+      "size": 58523,
+      "sha256": "sha256:b899e56e6e993829b984c17b2eb40240c4bb24810cf2e13e430093a14f924880"
     }
   ],
   "provenance": {
-    "source_digest": "sha256:0c006c26d220500e10869e053185d4695567afae28c7818254545da5138b0277",
+    "source_digest": "sha256:c2547f95763c882438c0b66b8d1e9a6a27b4222267ba390d308f21fe1088a4cd",
     "sdk_digest": "sha256:fd65c974511e63b3996e9fa7e438fb4e39df5f508d11636116ef150fcc123e35",
     "toolchain_digest": "sha256:e21cfc8222db408abe6ba5a482520639d9cf4b96481c19aff4b4246af8a65e42"
   },
@@ -38,6 +38,10 @@
   ],
   "tools": {},
   "operations": [
+    "records.list",
+    "records.show",
+    "records.create",
+    "records.update",
     "whatsapp.status",
     "whatsapp.connect_session",
     "whatsapp.conversations.list",
@@ -78,20 +82,8 @@
         "label": "Inbox"
       },
       {
-        "id": "templates",
-        "label": "Templates"
-      },
-      {
-        "id": "broadcasts",
-        "label": "Broadcasts"
-      },
-      {
         "id": "connection",
-        "label": "Connection"
-      },
-      {
-        "id": "ai",
-        "label": "AI agent"
+        "label": "Settings"
       }
     ]
   }

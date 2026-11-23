@@ -18,7 +18,7 @@ exact(decl.provenance,['source_digest','sdk_digest','toolchain_digest']);
 const expected = {source_digest:`sha256:${sourceDigest()}`,sdk_digest:`sha256:${env.pin.archive.sha256}`,toolchain_digest:`sha256:${hash(JSON.stringify(env.pin.toolchain))}`};
 if (Object.keys(expected).some(k => decl.provenance[k] !== expected[k])) fail('Source/SDK/toolchain provenance mismatch');
 exact(decl.navigation,['section_query','default_section','sections']);
-const navigation={section_query:'waba',default_section:'inbox',sections:[{id:'inbox',label:'Inbox'},{id:'templates',label:'Templates'},{id:'broadcasts',label:'Broadcasts'},{id:'connection',label:'Connection'},{id:'ai',label:'AI agent'}]};
+const navigation={section_query:'waba',default_section:'inbox',sections:[{id:'inbox',label:'Inbox'},{id:'connection',label:'Settings'}]};
 if (JSON.stringify(decl.navigation) !== JSON.stringify(navigation)) fail('WhatsApp navigation mismatch');
 const media={js:'text/javascript',css:'text/css',svg:'image/svg+xml',json:'application/json'};
 if (!Array.isArray(decl.assets) || !decl.assets.length || decl.assets.length > 32) fail('Asset count exceeds bounds');
@@ -38,7 +38,7 @@ const scripts=decl.assets.filter(a=>a.media_type==='text/javascript').map(a=>a.n
 if (decl.startup !== undefined && (!Array.isArray(decl.startup) || decl.startup.length<2 || decl.startup.length>32 || decl.startup.some(name=>typeof name!=='string') || new Set(decl.startup).size!==decl.startup.length || decl.startup.at(-1)!==decl.entry || decl.startup.length!==scripts.length || decl.startup.some(name=>!scripts.includes(name)))) fail('Startup must name every declared JavaScript asset once, entry last');
 if (JSON.stringify(decl.startup)!==JSON.stringify(['runtime.js','client.js'])) fail('The screen requires the ordered static framework/client partition');
 const manifest=decoder.decode(readFileSync(safePath(root,'app/app.md'))).split('\n---\n')[0];
-if (!/^    contracts: \{app-screens: \[1\], screen-records: \[1\], screen-startup: \[1\]\}$/m.test(manifest)) fail('The manifest must demand app-screens, screen-records and screen-startup v1');
+if (!/^    contracts: \{app-screens: \[1\], screen-records: \[1\], screen-startup: \[1\], app-storage: \[1\]\}$/m.test(manifest)) fail('The manifest must demand app-screens, screen-records, screen-startup and app-storage v1');
 const actual=files(out).map(p=>relative(out,p));
 if (actual.length !== names.size+1 || actual.some(p=>p !== 'screens.json' && !names.has(p))) fail('Unspecified screen assets');
 // Offline source audit, not a replacement for the real sandbox/CSP guard.

@@ -1,106 +1,788 @@
-import { Button,EmptyState,ErrorNotice,Field,Loading,Notice } from "@cadence/screen-ui";
-import { useCallback,useEffect,useState } from "react";
+import { ApiError,Button,EmptyState,ErrorNotice,Field,Loading,Notice,Select,type SelectOption } from "@cadence/screen-ui";
+import { Fragment,useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState,useSyncExternalStore,type ReactNode,type RefObject } from "react";
+import { channel } from "../../bridge/channel";
 import { patchRoute } from "../../bridge/route";
-import { routable,useOnPush,type DisplayScope } from "../../bridge/scope";
+import { routable,useOnPush,useScope,type DisplayScope } from "../../bridge/scope";
 import { serviceCall,serviceSlot } from "../../bridge/services";
+import ContactDrawer,{ threadStateLabel } from "./ContactDrawer";
+import { dueLabel,effectiveThreadState,listThreadWork,validWorkRef,type ThreadState,type ThreadWork } from "./inboxWork";
+import { useWorkBrowse } from "./useWorkBrowse";
+import { useLivePoll } from "./useLivePoll";
 import type { Recipient } from "./Templates";
-import { declinedReason,errorText,parseConversation,parseConversations,parseDraft,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Draft,type Message,type ReplyState,type ReplyStatus } from "./door";
+import { declinedReason,errorText,formatMediaBytes,formatMediaDuration,mediaAspectRatio,mediaBadge,mediaExtTone,mediaKindLabel,mediaMetaSummary,parseConversation,parseConversations,parseDraft,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Draft,type LinkedMediaInfo,type Message,type ReplyState,type ReplyStatus } from "./door";
 
 const PAGE = 25;
 /** What the copilot may show, derived from the host-granted actions (members get the draft read-only). */
 export interface Assist { show: boolean; brief: boolean; open: boolean; discard: boolean }
 /** Takeover actions the host granted; the banner itself is shown to everyone. */
 export interface Handoff { set: boolean; release: boolean }
-const DRAFT_POLL_MS = 5000;
+const LIVE_POLL_MS = 5000;
 type Load<T> = { state: "loading" } | { state: "ok"; value: T } | { state: "failed"; text: string };
 
-export default function Inbox({ scope, canReply, canTemplate, assist, handoff, routeId: routed, onRecipient }: { scope: DisplayScope; canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; routeId: string | null; onRecipient: (r: Recipient) => void }) {
+function sameMedia(a: LinkedMediaInfo | null, b: LinkedMediaInfo | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.kind === b.kind &&
+    a.mimeType === b.mimeType &&
+    a.fileName === b.fileName &&
+    a.byteLength === b.byteLength &&
+    a.width === b.width &&
+    a.height === b.height &&
+    a.durationSeconds === b.durationSeconds &&
+    a.ptt === b.ptt &&
+    a.caption === b.caption &&
+    a.available === b.available &&
+    a.unavailableReason === b.unavailableReason
+  );
+}
+
+function sameConversationRow(a: ConversationRow, b: ConversationRow): boolean {
+  if (a === b) return true;
+  return (
+    a.conversationId === b.conversationId &&
+    a.contact.name === b.contact.name &&
+    a.contact.phone === b.contact.phone &&
+    (a.lastMessage === b.lastMessage ||
+      (!!a.lastMessage &&
+        !!b.lastMessage &&
+        a.lastMessage.direction === b.lastMessage.direction &&
+        a.lastMessage.body === b.lastMessage.body &&
+        a.lastMessage.createdAt === b.lastMessage.createdAt)) &&
+    a.unreadCount === b.unreadCount &&
+    a.replyMode === b.replyMode &&
+    a.freeformUntil === b.freeformUntil &&
+    (a.work === b.work ||
+      (!!a.work &&
+        !!b.work &&
+        a.work.ref === b.work.ref &&
+        a.work.inboundVersion === b.work.inboundVersion))
+  );
+}
+
+function sameConversationRows(a: ConversationRow[], b: ConversationRow[]): boolean {
+  return a.length === b.length && a.every((row, i) => sameConversationRow(row, b[i]));
+}
+
+function sameConversation(a: Conversation, b: Conversation): boolean {
+  return (
+    sameConversationRow(a, b) &&
+    a.status === b.status &&
+    a.lastInboundAt === b.lastInboundAt &&
+    a.handoffAt === b.handoffAt
+  );
+}
+
+function sameMessage(a: Message, b: Message): boolean {
+  if (a === b) return true;
+  return (
+    a.id === b.id &&
+    a.direction === b.direction &&
+    a.body === b.body &&
+    a.status === b.status &&
+    a.senderType === b.senderType &&
+    a.createdAt === b.createdAt &&
+    a.type === b.type &&
+    a.previewJpeg === b.previewJpeg &&
+    sameMedia(a.media, b.media)
+  );
+}
+
+function sameMessageRows(a: Message[], b: Message[]): boolean {
+  return a.length === b.length && a.every((row, i) => sameMessage(row, b[i]));
+}
+
+function contactPhone(row: ConversationRow, linked: boolean) {
+  if (linked && row.conversationId.endsWith("@g.us")) return null;
+  if (!linked) return row.contact.phone;
+  if (row.contact.phone && /^\+[1-9]\d{7,14}$/.test(row.contact.phone)) return row.contact.phone;
+  // Older hosts may omit the phone. Only a phone-addressed JID proves it.
+  const address = /^([1-9]\d{7,14})(?::\d{1,5})?@s\.whatsapp\.net$/.exec(row.conversationId);
+  return address ? `+${address[1]}` : null;
+}
+
+const phoneUnavailable = (zh: boolean) => zh ? "未有電話號碼" : "Phone not available";
+
+function contactName(row: ConversationRow, phone: string | null, linked: boolean, zh: boolean, name?: string | null) {
+  const display = name || row.contact.name;
+  if (display) return display;
+  if (linked && row.conversationId.endsWith("@g.us")) return zh ? "WhatsApp 群組" : "WhatsApp group";
+  return phone ?? (linked ? phoneUnavailable(zh) : (zh ? "未知聯絡人" : "Unknown contact"));
+}
+
+function RowIdentity({ name, phone }: { name: string; phone: string | null }) {
+  return <span className="waba-row-name">
+    {name === phone ? <bdi className="waba-row-phone" dir="ltr">{phone}</bdi> : <span className="waba-row-title">{name}</span>}
+    {phone && phone !== name && <bdi className="waba-row-phone waba-muted" dir="ltr">{phone}</bdi>}
+  </span>;
+}
+
+function Avatar({ name, phone, group }: { name: string; phone?: string | null; group?: boolean }) {
+  if (group) {
+    return <span className="waba-avatar" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="9.2" cy="9" r="2.8" />
+        <path d="M4 18.5a5.2 5.2 0 0 1 10.4 0" />
+        <circle cx="16.5" cy="9.5" r="2.3" />
+        <path d="M16 14.2a4.3 4.3 0 0 1 4.2 4.3" />
+      </svg>
+    </span>;
+  }
+  const trimmed = name.trim();
+  const isGeneric = !trimmed || trimmed === phone || ["Phone not available", "未有電話號碼", "Unknown contact", "未知聯絡人", "WhatsApp group", "WhatsApp 群組"].includes(trimmed) || trimmed.startsWith("+");
+  if (isGeneric) {
+    return <span className="waba-avatar" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="8.5" r="3.6" />
+        <path d="M5.5 19.5a6.5 6.5 0 0 1 13 0" />
+      </svg>
+    </span>;
+  }
+  const parts = trimmed.split(/\s+/).filter(Boolean);
+  const chars = parts.length >= 2
+    ? `${Array.from(parts[0]!)[0] ?? ""}${Array.from(parts[1]!)[0] ?? ""}`
+    : Array.from(trimmed).slice(0, 2).join("");
+  return <span className="waba-avatar" aria-hidden="true">{chars.toLocaleUpperCase()}</span>;
+}
+
+const dayFormat = { en: new Intl.DateTimeFormat("en", { dateStyle: "medium" }), zh: new Intl.DateTimeFormat("zh-TW", { dateStyle: "medium" }) };
+const timeFormat = { en: new Intl.DateTimeFormat("en", { timeStyle: "short" }), zh: new Intl.DateTimeFormat("zh-TW", { timeStyle: "short" }) };
+const listDate = { en: new Intl.DateTimeFormat("en", { dateStyle: "short" }), zh: new Intl.DateTimeFormat("zh-TW", { dateStyle: "short" }) };
+function stamp(value: string | null) {
+  const parsed = Date.parse(value ?? "");
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function readWhileIndexing<T>(
+  read: () => Promise<T>,
+  current: () => boolean,
+  onIndexing: () => void,
+): Promise<T | undefined> {
+  while (current()) {
+    try { const result = await read(); return current() ? result : undefined; }
+    catch (error) {
+      if (!current()) return undefined;
+      if (!(error instanceof ApiError) || error.code !== "inbox_indexing") throw error;
+      onIndexing();
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+  return undefined;
+}
+
+type Queue = "all" | "unread" | ThreadState | "due";
+const allQueues: readonly Queue[] = ["all", "unread", "needs_reply", "due", "waiting", "done"];
+type WorkIndex = { records: Map<string, ThreadWork>; checked: Set<string> };
+const emptyWorkIndex = (): WorkIndex => ({ records: new Map(), checked: new Set() });
+function calendarDay(now: Date) {
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
+export default function Inbox({ scope, canReply, canTemplate, assist, handoff, routeId: routed, initialId, onRecipient, replyDirty, onDirtyChange, openSettings, tools }: { scope: DisplayScope; canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; routeId: string | null; initialId: string | null; onRecipient: (r: Recipient) => void; replyDirty: boolean; onDirtyChange: (dirty: boolean) => void; openSettings: () => Promise<unknown>; tools: ReactNode }) {
+  const zh = useScope()?.presentationLocale === "zh-TW", locale = zh ? "zh" : "en";
+  const linked = scope.provider === "linked";
+  const [settingsError, setSettingsError] = useState(false);
   const [rows, setRows] = useState<ConversationRow[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
-  const [list, setList] = useState<"loading" | "ok" | "more" | string>("loading");
+  const [list, setList] = useState<"loading" | "indexing" | "ok" | "more" | "failed">("loading");
+  const listRequest = useRef(0);
+  const foregroundList = useRef(false);
   const [filter, setFilter] = useState("");
+  const [queue, setQueue] = useState<Queue>("all");
+  const [inboxScope, setInboxScope] = useState<string | null>(null);
+  const liveInbox = useRef<string | null>(null);
+  const [work, setWork] = useState(emptyWorkIndex);
+  const [workError, setWorkError] = useState(false);
+  const remember = useCallback((record: ThreadWork) => {
+    if (!liveInbox.current || !validWorkRef(record.ref, liveInbox.current)) return;
+    setWork(previous => {
+      if ((previous.records.get(record.ref)?.revision ?? 0) >= record.revision) return previous;
+      return { records: new Map(previous.records).set(record.ref, record), checked: new Set(previous.checked).add(record.ref) };
+    });
+  }, []);
   // Ids outside the host route grammar stay a local selection.
-  const [local, setLocal] = useState<string | null>(null);
+  const [local, setLocal] = useState(initialId);
+  const [resolved, setResolved] = useState<Conversation | null>(null);
+  const [opening, setOpening] = useState(false);
+  const [openError, setOpenError] = useState(false);
+  const openingRequest = useRef(0);
+  const [newMessage, setNewMessage] = useState(false);
   const selected = routed ?? local;
-  // `quiet` is a host-push refresh: no loading state, loaded pages kept, errors
-  // leave what is shown in place.
-  const page = useCallback(async (after: string | null, quiet = false) => {
-    if (!quiet) setList(after ? "more" : "loading");
+  const openRow = useRef<HTMLElement | null>(null);
+  const focusThread = useRef(false);
+  const thread = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!focusThread.current) return;
+    focusThread.current = false;
+    if (newMessage || (selected && !openRow.current?.getClientRects().length)) thread.current?.querySelector<HTMLElement>("h2")?.focus({ preventScroll: true });
+    else if (!selected) openRow.current?.focus({ preventScroll: true });
+  }, [newMessage, selected]);
+  // `quiet` is a host-push or background poll refresh: no loading state, loaded pages
+  // kept, errors leave what is shown in place.
+  const page = useCallback(async (after: string | null, quiet = false): Promise<boolean> => {
+    if (quiet && foregroundList.current) return true;
+    const request = ++listRequest.current;
+    if (!quiet) { foregroundList.current = true; setList(after ? "more" : "loading"); }
     try {
-      const got = parseConversations(await serviceCall(scope, "whatsapp.conversations.list", { limit: PAGE, ...(after ? { cursor: after } : {}) }));
-      setRows(r => after ? [...r, ...got.rows.filter(n => !r.some(o => o.conversationId === n.conversationId))]
-        : quiet ? [...got.rows, ...r.filter(o => !got.rows.some(n => n.conversationId === o.conversationId))] : got.rows);
-      setCursor(c => quiet && c ? c : got.cursor); setList(l => l === "more" ? l : "ok");
-    } catch (e) { if (!quiet) setList(errorText(e, "The conversation list could not be read.")); }
-  }, [scope]);
-  useEffect(() => { void page(null); }, [page]);
+      const got = await readWhileIndexing(
+        async () => parseConversations(await serviceCall(scope, "whatsapp.conversations.list", { limit: PAGE, ...(after ? { cursor: after } : {}) })),
+        () => request === listRequest.current,
+        () => { if (!quiet) setList("indexing"); },
+      );
+      if (!got) return true;
+      const nextInbox = linked ? got.inboxScope : null;
+      const changed = nextInbox !== liveInbox.current;
+      if (changed) {
+        if (liveInbox.current !== null) {
+          openingRequest.current++;
+          setOpening(false); setLocal(null); setResolved(null); setNewMessage(false); setQueue("all");
+        }
+        liveInbox.current = nextInbox;
+        setInboxScope(nextInbox); setWork(emptyWorkIndex()); setWorkError(false);
+      }
+      setRows(r => {
+        const nextRows = changed ? got.rows : after ? [...r, ...got.rows.filter(n => !r.some(o => o.conversationId === n.conversationId))]
+          : quiet ? [...got.rows, ...r.filter(o => !got.rows.some(n => n.conversationId === o.conversationId))] : got.rows;
+        return sameConversationRows(r, nextRows) ? r : nextRows;
+      });
+      setCursor(c => quiet && c && !changed ? c : got.cursor); setList(l => l === "ok" ? l : "ok");
+      if (nextInbox && got.rows.length) {
+        const refs = got.rows.flatMap(r => r.work ? [r.work.ref] : []);
+        try {
+          const records = await listThreadWork(scope, nextInbox, refs);
+          if (request !== listRequest.current) return true;
+          setWork(previous => {
+            const next = { records: new Map(previous.records), checked: new Set(previous.checked) };
+            let workChanged = false;
+            for (const ref of refs) {
+              if (!next.checked.has(ref)) {
+                next.checked.add(ref);
+                workChanged = true;
+              }
+            }
+            for (const record of records) {
+              if ((next.records.get(record.ref)?.revision ?? 0) < record.revision) {
+                next.records.set(record.ref, record);
+                workChanged = true;
+              }
+            }
+            return workChanged ? next : previous;
+          });
+          setWorkError(e => e ? false : e);
+        } catch { if (request === listRequest.current) setWorkError(true); }
+      }
+      return true;
+    } catch (error) {
+      if (request !== listRequest.current) return true;
+      if (linked && error instanceof ApiError && error.code === "not_granted") {
+        openingRequest.current++;
+        liveInbox.current = null;
+        setInboxScope(null); setLocal(null); setResolved(null); setNewMessage(false);
+        setOpening(false); setOpenError(false); setQueue("all"); setRows([]); setCursor(null);
+        setWork(emptyWorkIndex()); setWorkError(false); setList("failed");
+      } else if (!quiet) setList("failed");
+      return false;
+    }
+    finally { if (!quiet && request === listRequest.current) foregroundList.current = false; }
+  }, [scope, linked]);
+  useEffect(() => { void page(null); return () => { listRequest.current++; foregroundList.current = false; }; }, [page]);
   useOnPush(() => page(null, true));
-  function select(id: string | null) {
+  useLivePoll({
+    enabled: list === "ok",
+    poll: () => page(null, true),
+    intervalMs: LIVE_POLL_MS,
+  });
+  function select(id: string | null, observed: Conversation | null = null) {
+    openingRequest.current++;
+    setOpening(false); setOpenError(false); setResolved(observed);
+    setNewMessage(false);
+    focusThread.current = true;
+    if (scope.provider === "linked") { setLocal(id); return; }
     if (id === null || routable(id)) { setLocal(null); void patchRoute({ section: "inbox", view: "list", record_id: id }).catch(() => undefined); }
     else { setLocal(id); void patchRoute({ section: "inbox", view: "list", record_id: null }).catch(() => undefined); }
   }
-  const needle = filter.trim().toLowerCase();
-  const shown = needle ? rows.filter(r => [r.contact.name, r.contact.phone, r.lastMessage?.body].some(v => v?.toLowerCase().includes(needle))) : rows;
-  const failed = list !== "loading" && list !== "ok" && list !== "more";
-  return <section className="waba-page waba-inbox" data-selected={selected ? "yes" : "no"} aria-label="Inbox">
+  async function openWork(ref: string, source: HTMLElement) {
+    if (!inboxScope || !validWorkRef(ref, inboxScope) || opening || replyDirty) return;
+    const account = inboxScope, request = ++openingRequest.current;
+    setOpening(true); setOpenError(false);
+    try {
+      const found = parseConversation(await serviceCall(scope, "whatsapp.conversations.show", { conversation_id: ref }));
+      if (request !== openingRequest.current || liveInbox.current !== account) return;
+      if (found.work?.ref !== ref || found.conversationId === ref) throw new ApiError("Conversation reference did not resolve", 502);
+      openRow.current = source;
+      select(found.conversationId, found);
+    } catch { if (request === openingRequest.current) setOpenError(true); }
+    finally { if (request === openingRequest.current) setOpening(false); }
+  }
+  const now = new Date(), today = dayFormat[locale].format(now), dueDay = calendarDay(now);
+  const needle = filter.trim().toLocaleLowerCase();
+  const browse = useWorkBrowse(scope, inboxScope, queue === "due" ? "due" : queue === "all" && needle ? "names" : null, queue === "due" ? dueDay : needle);
+  const recordFor = (row: ConversationRow) => row.work && inboxScope && validWorkRef(row.work.ref, inboxScope) ? work.records.get(row.work.ref) : undefined;
+  const canFilterUnread = rows.some(row => row.unreadCount !== null);
+  useLayoutEffect(() => {
+    if (!canFilterUnread && queue === "unread") setQueue("all");
+  }, [canFilterUnread, queue]);
+  const unreadCount = rows.filter(row => (row.unreadCount ?? 0) > 0).length;
+  const selectedRow = selected ? rows.find(r => r.conversationId === selected) ?? null : null;
+  const shown = queue === "due" ? [] : rows.filter(r => {
+    const record = recordFor(r);
+    if (queue === "unread" ? (r.unreadCount ?? 0) <= 0
+      : queue !== "all" && (!r.work || !work.checked.has(r.work.ref) || effectiveThreadState(record, r.work.inboundVersion) !== queue)) return false;
+    return !needle || [record?.name, r.contact.name, contactPhone(r, linked), r.lastMessage?.body].some(v => v?.toLocaleLowerCase().includes(needle));
+  });
+  const pageByRef = useMemo(() => new Map(rows.flatMap(r => r.work ? [[r.work.ref, r] as const] : [])), [rows]);
+  const extras = browse.page?.rows.map(row => work.records.get(row.ref) ?? row).filter(r => {
+    if (queue === "due") {
+      const known = pageByRef.get(r.ref);
+      return !!r.due && r.due <= dueDay && (!needle || [r.name, known?.contact.name, known && contactPhone(known, linked)].some(value => value?.toLocaleLowerCase().includes(needle)));
+    }
+    return !pageByRef.has(r.ref) && !!r.name?.toLocaleLowerCase().includes(needle);
+  }) ?? [];
+  const queueStats = useMemo(() => {
+    let needsReply = 0, waiting = 0, done = 0, dueLoaded = 0;
+    for (const r of rows) {
+      if (!r.work || !work.checked.has(r.work.ref)) continue;
+      const record = work.records.get(r.work.ref);
+      const state = effectiveThreadState(record, r.work.inboundVersion);
+      if (state === "needs_reply") needsReply += 1;
+      else if (state === "waiting") waiting += 1;
+      else if (state === "done") done += 1;
+      if (record?.due && record.due <= dueDay) dueLoaded += 1;
+    }
+    const dueExact = queue === "due" && browse.page?.state === "ok"
+      ? (browse.page.cursor ? `${extras.length}+` : String(extras.length))
+      : dueLoaded > 0 ? String(dueLoaded) : undefined;
+    return { needsReply, waiting, done, dueBadge: dueExact };
+  }, [rows, work, dueDay, queue, browse.page, extras.length]);
+  const queueOptions = useMemo<SelectOption[]>(() => {
+    const inboxGroup = inboxScope ? (zh ? "收件匣" : "Inbox") : undefined;
+    const workGroup = zh ? "跟進及狀態" : "Follow-up & status";
+    const opts: SelectOption[] = [
+      { value: "all", label: zh ? "全部對話" : "All chats", ...(rows.length > 0 ? { badge: String(rows.length) } : {}), ...(inboxGroup ? { group: inboxGroup } : {}) },
+      ...(canFilterUnread ? [{ value: "unread", label: zh ? "未讀" : "Unread", ...(unreadCount > 0 ? { badge: String(unreadCount) } : {}), ...(inboxGroup ? { group: inboxGroup } : {}) }] : []),
+    ];
+    if (inboxScope) {
+      opts.push(
+        { value: "needs_reply", label: threadStateLabel("needs_reply", zh), ...(queueStats.needsReply > 0 ? { badge: String(queueStats.needsReply) } : {}), group: workGroup },
+        { value: "due", label: zh ? "待跟進" : "Follow-ups due", ...(queueStats.dueBadge ? { badge: queueStats.dueBadge } : {}), group: workGroup },
+        { value: "waiting", label: threadStateLabel("waiting", zh), ...(queueStats.waiting > 0 ? { badge: String(queueStats.waiting) } : {}), group: workGroup },
+        { value: "done", label: threadStateLabel("done", zh), ...(queueStats.done > 0 ? { badge: String(queueStats.done) } : {}), group: workGroup },
+      );
+    }
+    return opts;
+  }, [inboxScope, zh, rows.length, canFilterUnread, unreadCount, queueStats]);
+  const activeQueueLabel = queueOptions.find(o => o.value === queue)?.label ?? (zh ? "全部對話" : "All chats");
+  const visibleCount = queue === "due" ? extras.length : shown.length + extras.length;
+  const failed = list === "failed";
+  const browseLabel = queue === "due" ? (zh ? "查找跟進事項…" : "Finding follow-ups…") : (zh ? "搜尋已儲存名稱…" : "Searching saved names…");
+  return <section className="waba-page waba-inbox" data-selected={newMessage || selected ? "yes" : "no"} aria-label={zh ? "收件匣" : "Inbox"}>
     <div className="waba-list" aria-labelledby="waba-inbox-title">
-      <header className="waba-head">
-        <h1 id="waba-inbox-title">Inbox</h1>
-        <Button size="sm" onClick={() => { void page(null); }} loading={list === "loading"}>Refresh</Button>
+      <header className="waba-list-head">
+        <div className="waba-head">
+          <h1 id="waba-inbox-title" tabIndex={-1}>{zh ? "收件匣" : "Inbox"}</h1>
+          {linked && canReply && <Button size="sm" variant="primary" disabled={replyDirty || opening} onClick={e => { openRow.current = e.currentTarget; focusThread.current = true; setLocal(null); setResolved(null); setNewMessage(true); }}>{zh ? "新增訊息" : "New message"}</Button>}
+          {tools}
+        </div>
+        <input className="field waba-search" type="search" aria-label={zh ? "搜尋對話" : "Search conversations"} placeholder={zh ? "搜尋對話…" : "Search conversations…"} value={filter} onChange={e => setFilter(e.target.value)} />
+        {(canFilterUnread || inboxScope) && <div className="waba-list-filters" role="group" aria-label={zh ? "篩選對話" : "Filter conversations"}>
+          <Select className="waba-queue-select" size="sm" full value={queue} options={queueOptions} aria-label={zh ? "選擇對話佇列" : "Filter conversation queue"} onChange={next => {
+            const matched = allQueues.find(value => value === next);
+            setQueue(matched ?? "all");
+          }} />
+          {inboxScope && <button type="button" className="waba-due-toggle" aria-pressed={queue === "due"} onClick={() => setQueue(queue === "due" ? "all" : "due")}>
+            <span className="waba-due-dot" aria-hidden="true" />
+            <span>{zh ? "待跟進" : "Due"}</span>
+            {queueStats.dueBadge && <span className="waba-due-count">{queueStats.dueBadge}</span>}
+          </button>}
+        </div>}
       </header>
-      <Field label="Filter loaded conversations">{c => <input {...c} className="field" type="search" value={filter} onChange={e => setFilter(e.target.value)} />}</Field>
-      {list === "loading" && !rows.length ? <Loading>Reading conversations…</Loading>
-        : failed ? <ErrorNotice onRetry={() => { void page(null); }}>{list}</ErrorNotice>
-        : !shown.length ? <EmptyState title={needle ? "No loaded conversation matches" : "No conversations yet"} name="conversations">{needle ? "Load more or clear the filter." : "New WhatsApp conversations appear here after a refresh."}</EmptyState>
-        : <ul className="waba-rows">{shown.map(r => <li key={r.conversationId}>
-            <button type="button" className="waba-row" aria-current={r.conversationId === selected ? "true" : undefined} onClick={() => select(r.conversationId)}>
-              <span className="waba-row-name">{r.contact.name ?? r.contact.phone ?? "Unknown contact"}{r.unreadCount ? <span className="waba-badge" aria-label={`${r.unreadCount} unread`}>{r.unreadCount}</span> : null}</span>
-              <span className="waba-row-last">{r.lastMessage?.direction === "outbound" ? "You: " : ""}{r.lastMessage?.body ?? ""}</span>
-              <span className="waba-muted">{when(r.lastMessage?.createdAt ?? null)}{windowOpen(r) ? "" : " · window closed"}</span>
+      <div className="waba-list-scroll">
+      {queue !== "all" && list === "ok" && <div className="waba-active-filter">
+        <span>{zh ? `顯示 ${visibleCount} 項 · ${activeQueueLabel}` : `Showing ${visibleCount} · ${activeQueueLabel}`}</span>
+        <button type="button" className="waba-active-reset" onClick={() => setQueue("all")}>{zh ? "重設" : "Reset"}</button>
+      </div>}
+      {workError && queue !== "due" && <ErrorNotice bare onRetry={() => { void page(null, true); }}>{zh ? "無法載入跟進狀態。" : "Couldn’t refresh conversation work."}</ErrorNotice>}
+      {opening && <Loading>{zh ? "正在開啟對話…" : "Opening conversation…"}</Loading>}
+      {openError && <ErrorNotice bare>{zh ? "無法開啟對話。請檢查已連結帳戶。" : "Couldn’t open that conversation. Check the linked account."}</ErrorNotice>}
+      {browse.page?.state === "failed" && <ErrorNotice bare onRetry={() => { void browse.load(browse.page?.cursor); }}>{zh ? "無法讀取搜尋結果。" : "Couldn’t read those results."}</ErrorNotice>}
+      {list === "indexing" && rows.length > 0 && <p className="waba-muted" role="status">{zh ? "正在整理較早的對話…" : "Indexing older conversations…"}</p>}
+      {(list === "loading" || list === "indexing") && !rows.length ? <Loading>{list === "indexing" ? (zh ? "正在整理較早的對話…" : "Indexing older conversations…") : (zh ? "正在載入對話…" : "Loading conversations…")}</Loading>
+        : failed ? <>
+          <ErrorNotice onRetry={() => { void page(null); }}>{zh ? "無法載入對話。" : "Couldn’t load conversations."}</ErrorNotice>
+          <Button size="sm" variant="ghost" disabled={replyDirty} onClick={() => { setSettingsError(false); void openSettings().catch(() => setSettingsError(true)); }}>{zh ? "開啟設定" : "Open Settings"}</Button>
+          {settingsError && <ErrorNotice bare>{zh ? "請在側欄選取設定。" : "Choose Settings in the sidebar."}</ErrorNotice>}
+        </>
+        : !shown.length && !extras.length && browse.page?.state === "loading" ? <Loading>{browseLabel}</Loading>
+        : !shown.length && !extras.length && browse.page?.state !== "failed" ? <EmptyState title={queue === "due" ? (zh ? "沒有待跟進事項" : "No follow-ups due") : needle || queue !== "all" ? (zh ? "找不到符合的對話" : "No matching conversations") : (zh ? "暫未有對話" : "No conversations yet")} name="conversations">
+            {cursor && queue !== "due" && (needle || queue !== "all") ? (zh ? "可載入更多對話以查看較早結果。" : "Load more conversations to check older results.")
+              : queue === "due" ? (zh ? "跟進日期到期時，對話會在這裏出現。" : "Conversations appear here when their follow-up date is due.")
+              : !needle && queue === "all" ? (zh ? "新的 WhatsApp 對話會在這裏顯示。" : "New WhatsApp conversations will appear here.") : undefined}
+          </EmptyState>
+        : <ul className="waba-rows">{shown.map(r => {
+          const phone = contactPhone(r, linked);
+          const record = recordFor(r);
+          const groupRow = linked && r.conversationId.endsWith("@g.us");
+          const name = contactName(r, phone, linked, zh, record?.name), at = stamp(r.lastMessage?.createdAt ?? null);
+          const state = r.work && work.checked.has(r.work.ref) ? effectiveThreadState(record, r.work.inboundVersion) : null;
+          const isDue = !!record?.due && record.due <= dueDay;
+          const flag = isDue ? dueLabel(record!.due!, dueDay, zh)
+            : state && state !== "needs_reply" ? threadStateLabel(state, zh) : null;
+          const flagTone = isDue ? (record!.due! < dueDay ? "overdue" : "due") : state === "done" ? "done" : "waiting";
+          const unread = r.unreadCount ?? 0;
+          const lastText = r.lastMessage
+            ? `${r.lastMessage.direction === "outbound" ? (zh ? "你：" : "You: ") : ""}${r.lastMessage.body ?? (zh ? "媒體附件" : "Attachment")}`
+            : "";
+          return <li key={r.conversationId}>
+            <button type="button" className="waba-row" disabled={replyDirty || opening} aria-current={r.conversationId === selected ? "true" : undefined} data-unread={unread > 0 ? "yes" : undefined} onClick={e => { openRow.current = e.currentTarget; select(r.conversationId); }}>
+              <Avatar name={name} phone={phone} group={groupRow} />
+              <RowIdentity name={name} phone={linked ? phone : null} />
+              {at === null ? <span /> : <time className="waba-row-time" dateTime={r.lastMessage?.createdAt ?? undefined}>{dayFormat[locale].format(at) === today ? timeFormat[locale].format(at) : listDate[locale].format(at)}</time>}
+              <span className="waba-row-last">{lastText}</span>
+              {unread > 0 && <span className="waba-badge" aria-label={zh ? `${unread} 則未讀訊息` : `${unread} unread`}>{unread > 99 ? "99+" : unread}</span>}
+              {flag && <span className="waba-row-flag" data-tone={flagTone}>{flag}</span>}
             </button>
-          </li>)}</ul>}
-      {cursor && !failed && <Button size="sm" onClick={() => { void page(cursor); }} loading={list === "more"}>Load more</Button>}
+          </li>;
+        })}{extras.map(record => {
+          const known = pageByRef.get(record.ref) ?? (resolved?.work?.ref === record.ref ? resolved : null);
+          const phone = known ? contactPhone(known, linked) : null;
+          const groupRow = !!known && linked && known.conversationId.endsWith("@g.us");
+          const name = known ? contactName(known, phone, linked, zh, record.name) : record.name ?? (zh ? "較早對話" : "Earlier conversation");
+          return <li key={record.ref}>
+            <button type="button" className="waba-row" aria-disabled={opening || undefined} disabled={replyDirty} aria-current={selected && (known?.conversationId === selected || resolved?.work?.ref === record.ref) ? "true" : undefined}
+              onClick={e => { remember(record); void openWork(record.ref, e.currentTarget); }}>
+              <Avatar name={name} phone={phone} group={groupRow} />
+              <RowIdentity name={name} phone={phone} />
+              <span />
+              <span className="waba-row-last">{record.due ? `${dueLabel(record.due, dueDay, zh)} · ${record.due}` : (zh ? "已儲存的對話名稱" : "Saved conversation name")}</span>
+            </button>
+          </li>;
+        })}</ul>}
+        {cursor && !failed && queue !== "due" && <div className="waba-page-more"><Button size="sm" loading={list === "more" || list === "indexing"} onClick={() => { void page(cursor); }}>{zh ? "載入更多" : "Load more"}</Button></div>}
+        {browse.page?.cursor && browse.page.state !== "failed" && <div className="waba-page-more"><Button size="sm" loading={browse.page.state === "loading"} onClick={() => { void browse.load(browse.page?.cursor); }}>{zh ? "更多結果" : "More results"}</Button></div>}
+      </div>
     </div>
-    <div className="waba-thread">
-      {selected ? <Thread key={selected} scope={scope} id={selected} canReply={canReply} canTemplate={canTemplate} assist={assist} handoff={handoff} onRecipient={onRecipient} onBack={() => select(null)} />
-        : <EmptyState title="Select a conversation" name="thread">Messages and the reply composer appear here.</EmptyState>}
+    <div ref={thread} className="waba-thread">
+      {newMessage ? <NewLinkedReply scope={scope} dirty={replyDirty} onDirtyChange={onDirtyChange} onBack={() => select(null)} onChanged={() => { void page(null, true); }} />
+        : selected ? <Thread key={selected} scope={scope} id={selected} initial={resolved} preview={selectedRow} inboxScope={inboxScope} work={work} onWork={remember} canReply={canReply} canTemplate={canTemplate} assist={assist} handoff={handoff} onRecipient={onRecipient} onDirtyChange={onDirtyChange} onBack={() => select(null)} replyDirty={replyDirty} />
+        : <div className="waba-thread-empty">
+            <p><strong>{zh ? "選擇對話" : "Select a conversation"}</strong></p>
+            <p className="waba-muted">{zh ? "打開對話以查看記錄及回覆。" : "Open a conversation to read and reply."}</p>
+          </div>}
     </div>
   </section>;
 }
 
-function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient, onBack }: { scope: DisplayScope; id: string; canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; onRecipient: (r: Recipient) => void; onBack: () => void }) {
-  const [conversation, setConversation] = useState<Load<Conversation>>({ state: "loading" });
-  const [messages, setMessages] = useState<Load<{ rows: Message[]; cursor: string | null }>>({ state: "loading" });
-  // `quiet` is a host-push refresh: shown data stays on a failed read, and
-  // messages already loaded stay (newer rows win by id).
-  const show = useCallback(async (quiet = false) => {
-    try { setConversation({ state: "ok", value: parseConversation(await serviceCall(scope, "whatsapp.conversations.show", { conversation_id: id })) }); }
-    catch (e) { setConversation(c => quiet && c.state === "ok" ? c : { state: "failed", text: errorText(e, "The conversation could not be read.") }); }
-  }, [scope, id]);
-  const read = useCallback(async (after: string | null = null, quiet = false) => {
+function NewLinkedReply({ scope, dirty, onDirtyChange, onBack, onChanged }: { scope: DisplayScope; dirty: boolean; onDirtyChange: (dirty: boolean) => void; onBack: () => void; onChanged: () => void }) {
+  const [phone, setPhone] = useState("");
+  const [target, setTarget] = useState<string | null>(null);
+  return <article className="waba-card" aria-labelledby="waba-new-message-title">
+    <header className="waba-head">
+      <Button size="sm" variant="ghost" disabled={dirty} onClick={onBack}>Back</Button>
+      <h2 id="waba-new-message-title" tabIndex={-1}>New linked-device message</h2>
+    </header>
+    {target === null ? <form className="waba-composer" onSubmit={e => { e.preventDefault(); if (/^\+[1-9]\d{7,14}$/.test(phone)) setTarget(`${phone.slice(1)}@s.whatsapp.net`); }}>
+      <Field label="Recipient phone number" hint="Use international format, including + and country code.">
+        {c => <input {...c} className="field" type="tel" autoComplete="tel" required pattern="\+[1-9][0-9]{7,14}" value={phone} onChange={e => setPhone(e.target.value)} />}
+      </Field>
+      <Button type="submit" variant="primary">Continue</Button>
+    </form> : <>
+      <p>To: <strong>{phone}</strong></p>
+      <Button size="sm" variant="ghost" disabled={dirty} onClick={() => setTarget(null)}>Change number</Button>
+      <Composer scope={scope} conversationId={target} handoffAt={null} freeformUntil={null} open autoTakeover={false} inserted={null} onSent={onChanged} onChanged={onChanged} onDirtyChange={onDirtyChange} />
+    </>}
+  </article>;
+}
+
+function ThreadSkeleton({ indexing, zh }: { indexing: boolean; zh: boolean }) {
+  const label = indexing
+    ? (zh ? "正在整理較早的訊息…" : "Indexing older messages…")
+    : (zh ? "正在載入訊息…" : "Loading messages…");
+  return <div className="waba-skeleton" role="status">
+    <span className="waba-sr">{label}</span>
+    {indexing && <div className="waba-skeleton-indexing" aria-hidden="true">
+      <span className="waba-inline-spin" />
+      <span>{label}</span>
+    </div>}
+    <div className="waba-skeleton-date" aria-hidden="true" />
+    <div className="waba-skeleton-bubble" data-direction="inbound" data-size="lg" aria-hidden="true">
+      <span className="waba-skeleton-line" />
+      <span className="waba-skeleton-line" data-short="" />
+      <span className="waba-skeleton-meta" />
+    </div>
+    <div className="waba-skeleton-bubble" data-direction="outbound" data-size="md" aria-hidden="true">
+      <span className="waba-skeleton-line" />
+      <span className="waba-skeleton-meta" />
+    </div>
+    <div className="waba-skeleton-bubble" data-direction="inbound" data-size="xl" aria-hidden="true">
+      <span className="waba-skeleton-line" />
+      <span className="waba-skeleton-line" data-med="" />
+      <span className="waba-skeleton-meta" />
+    </div>
+    <div className="waba-skeleton-bubble" data-direction="outbound" data-size="sm" aria-hidden="true">
+      <span className="waba-skeleton-line" />
+      <span className="waba-skeleton-meta" />
+    </div>
+    <div className="waba-skeleton-bubble" data-direction="inbound" data-size="md" aria-hidden="true">
+      <span className="waba-skeleton-line" />
+      <span className="waba-skeleton-meta" />
+    </div>
+  </div>;
+}
+
+function Thread({ scope, id, initial, preview, inboxScope, work, onWork, canReply, canTemplate, assist, handoff, onRecipient, onDirtyChange, onBack, replyDirty }: {
+  scope: DisplayScope; id: string; initial: Conversation | null; preview: ConversationRow | null; inboxScope: string | null; work: WorkIndex; onWork: (record: ThreadWork) => void;
+  canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; onRecipient: (r: Recipient) => void;
+  onDirtyChange: (dirty: boolean) => void; onBack: () => void; replyDirty: boolean;
+}) {
+  const zh = useScope()?.presentationLocale === "zh-TW";
+  const unavailablePreview = zh ? "無法顯示預覽" : "Preview unavailable";
+  const [conversation, setConversation] = useState<Load<Conversation>>(() => initial?.conversationId === id ? { state: "ok", value: initial } : { state: "loading" });
+  const [messages, setMessages] = useState<Load<{ rows: Message[]; cursor: string | null; previousAnchor?: { row: HTMLElement; top: number } }>>({ state: "loading" });
+  const [indexing, setIndexing] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const messageRequest = useRef(0);
+  const foregroundMessages = useRef(false);
+  const timeline = useRef<HTMLDivElement>(null);
+  const messagePane = useRef<HTMLDivElement>(null);
+  const keepBottom = useRef(true);
+  const timelineScroll = useRef({ width: 0, height: 0, top: 0 });
+  const [showLatest, setShowLatest] = useState(false);
+  const [details, setDetails] = useState(false);
+  const replyEdited = useRef(false), workEdited = useRef(false);
+  const onReplyDirty = useCallback((dirty: boolean) => {
+    replyEdited.current = dirty;
+    onDirtyChange(dirty || workEdited.current);
+  }, [onDirtyChange]);
+  const onWorkDirty = useCallback((dirty: boolean) => {
+    workEdited.current = dirty;
+    onDirtyChange(dirty || replyEdited.current);
+  }, [onDirtyChange]);
+  const detailsButton = useRef<HTMLButtonElement>(null);
+  const wasDetailsOpen = useRef(false);
+  const closeLightboxButton = useRef<HTMLButtonElement>(null);
+  type LoadedInlineMedia = { url: string; mimeType: string; fileName: string | null };
+  type QueuedAutoMedia = {
+    messageId: string;
+    resolve: (value: LoadedInlineMedia) => void;
+    reject: (error: unknown) => void;
+  };
+  const mediaMounted = useRef(true);
+  const mediaUrls = useRef<Map<string, string>>(new Map());
+  const loadedMediaRef = useRef<Map<string, LoadedInlineMedia>>(new Map());
+  const inlineInFlight = useRef<Map<string, Promise<LoadedInlineMedia>>>(new Map());
+  const autoQueue = useRef<QueuedAutoMedia[]>([]);
+  const autoQueuedPromises = useRef<Map<string, { task: QueuedAutoMedia; promise: Promise<LoadedInlineMedia> }>>(new Map());
+  const autoRunning = useRef(0);
+  const [loadedMedia, setLoadedMedia] = useState<Map<string, LoadedInlineMedia>>(() => new Map());
+  const [lightboxId, setLightboxId] = useState<string | null>(null);
+  const hostMediaDownload = useSyncExternalStore(channel.subscribeReplyAvailability, () => channel.hostMediaDownload);
+  useEffect(() => {
+    mediaMounted.current = true;
+    const urls = mediaUrls.current;
+    const loaded = loadedMediaRef.current;
+    const queued = autoQueue.current;
+    const queuedMap = autoQueuedPromises.current;
+    return () => {
+      mediaMounted.current = false;
+      queued.length = 0;
+      queuedMap.clear();
+      for (const url of urls.values()) URL.revokeObjectURL(url);
+      urls.clear();
+      loaded.clear();
+    };
+  }, []);
+  const runInlineFetch = useCallback((messageId: string): Promise<LoadedInlineMedia> => {
+    const active = inlineInFlight.current.get(messageId);
+    if (active) return active;
+    const promise = channel.downloadMedia(id, messageId).then(downloaded => {
+      if (!mediaMounted.current) {
+        return { url: "", mimeType: downloaded.mimeType, fileName: downloaded.fileName };
+      }
+      const prev = mediaUrls.current.get(messageId);
+      if (prev) URL.revokeObjectURL(prev);
+      const url = URL.createObjectURL(new Blob([downloaded.bytes], { type: downloaded.mimeType }));
+      mediaUrls.current.set(messageId, url);
+      const entry: LoadedInlineMedia = { url, mimeType: downloaded.mimeType, fileName: downloaded.fileName };
+      loadedMediaRef.current.set(messageId, entry);
+      setLoadedMedia(current => new Map(current).set(messageId, entry));
+      return entry;
+    }).finally(() => {
+      inlineInFlight.current.delete(messageId);
+    });
+    inlineInFlight.current.set(messageId, promise);
+    return promise;
+  }, [id]);
+  const drainAutoQueue = useCallback(() => {
+    while (mediaMounted.current && autoRunning.current < 1 && autoQueue.current.length > 0) {
+      const task = autoQueue.current.pop()!;
+      autoQueuedPromises.current.delete(task.messageId);
+      const cached = loadedMediaRef.current.get(task.messageId);
+      if (cached && cached.url) {
+        task.resolve(cached);
+        continue;
+      }
+      autoRunning.current += 1;
+      void runInlineFetch(task.messageId)
+        .then(task.resolve, task.reject)
+        .finally(() => {
+          autoRunning.current = Math.max(0, autoRunning.current - 1);
+          drainAutoQueue();
+        });
+    }
+  }, [runInlineFetch]);
+  const loadInlineMedia = useCallback((messageId: string, priority: "user" | "auto" = "user"): Promise<LoadedInlineMedia> => {
+    const cached = loadedMediaRef.current.get(messageId);
+    if (cached && cached.url) return Promise.resolve(cached);
+    const active = inlineInFlight.current.get(messageId);
+    if (active) return active;
+    const queued = autoQueuedPromises.current.get(messageId);
+    if (priority === "user") {
+      if (queued) {
+        autoQueuedPromises.current.delete(messageId);
+        const idx = autoQueue.current.indexOf(queued.task);
+        if (idx >= 0) autoQueue.current.splice(idx, 1);
+        const direct = runInlineFetch(messageId);
+        direct.then(queued.task.resolve, queued.task.reject);
+        return direct;
+      }
+      return runInlineFetch(messageId);
+    }
+    if (queued) return queued.promise;
+    let resolve!: (value: LoadedInlineMedia) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<LoadedInlineMedia>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    const task: QueuedAutoMedia = { messageId, resolve, reject };
+    autoQueuedPromises.current.set(messageId, { task, promise });
+    autoQueue.current.push(task);
+    drainAutoQueue();
+    return promise;
+  }, [runInlineFetch, drainAutoQueue]);
+  useLayoutEffect(() => {
+    if (lightboxId !== null) closeLightboxButton.current?.focus({ preventScroll: true });
+  }, [lightboxId]);
+  function jumpToLatest() {
+    const pane = timeline.current;
+    if (!pane) return;
+    pane.focus({ preventScroll: true });
+    pane.scrollTo({ top: pane.scrollHeight, behavior: "instant" });
+    keepBottom.current = true;
+    setShowLatest(false);
+  }
+  function closeDetails() {
+    setDetails(false);
+  }
+  useLayoutEffect(() => {
+    if (wasDetailsOpen.current && !details) {
+      detailsButton.current?.focus({ preventScroll: true });
+    }
+    wasDetailsOpen.current = details;
+  }, [details]);
+  useLayoutEffect(() => {
+    const pane = timeline.current;
+    if (!pane) return;
+    const observer = new ResizeObserver(() => {
+      if (keepBottom.current) pane.scrollTop = pane.scrollHeight;
+      const last = timelineScroll.current;
+      last.width = pane.clientWidth;
+      last.height = pane.clientHeight;
+      last.top = pane.scrollTop;
+    });
+    observer.observe(pane);
+    return () => observer.disconnect();
+  }, []);
+  // `quiet` is a host-push or background poll refresh: shown data stays on a failed
+  // read, and messages already loaded stay (newer rows win by id).
+  const show = useCallback(async (quiet = false): Promise<boolean> => {
     try {
-      const got = parseMessages(await serviceCall(scope, "whatsapp.messages", { conversation_id: id, limit: 50, ...(after ? { cursor: after } : {}) }));
-      setMessages(m => m.state === "ok" && (after || quiet)
-        ? { state: "ok", value: { rows: after ? [...m.value.rows, ...got.rows.filter(n => !m.value.rows.some(o => o.id === n.id))] : [...got.rows, ...m.value.rows.filter(o => !got.rows.some(n => n.id === o.id))], cursor: quiet ? m.value.cursor : got.cursor } }
-        : { state: "ok", value: { rows: got.rows, cursor: got.cursor } });
-    } catch (e) { setMessages(m => quiet && m.state === "ok" ? m : { state: "failed", text: errorText(e, "Messages could not be read.") }); }
+      const next = parseConversation(await serviceCall(scope, "whatsapp.conversations.show", { conversation_id: id }));
+      if (next.conversationId !== id) throw new ApiError("The conversation identity changed", 502);
+      setConversation(c => c.state === "ok" && sameConversation(c.value, next) ? c : { state: "ok", value: next });
+      return true;
+    }
+    catch (e) {
+      setConversation(c => quiet && c.state === "ok" ? c : { state: "failed", text: errorText(e, "The conversation could not be read.") });
+      return false;
+    }
+  }, [scope, id]);
+  const read = useCallback(async (after: string | null = null, quiet = false): Promise<boolean> => {
+    if (quiet && foregroundMessages.current) return true;
+    const request = ++messageRequest.current;
+    if (!quiet) {
+      foregroundMessages.current = true;
+      setIndexing(false);
+      if (after) setLoadingOlder(true);
+    }
+    try {
+      const got = await readWhileIndexing(
+        async () => parseMessages(await serviceCall(scope, "whatsapp.messages", { conversation_id: id, limit: 50, ...(after ? { cursor: after } : {}) })),
+        () => request === messageRequest.current,
+        () => setIndexing(true),
+      );
+      if (!got) return true;
+      setIndexing(i => i ? false : i);
+      // A dock resize can change the scroll extent in the same commit as an
+      // older page. Anchor a retained row, not the height including the dock.
+      const row = after ? timeline.current?.querySelector<HTMLElement>(".waba-message") : null;
+      const previousAnchor = row ? { row, top: row.offsetTop } : undefined;
+      setMessages(m => {
+        if (m.state === "ok" && (after || quiet)) {
+          const nextRows = after
+            ? [...m.value.rows, ...got.rows.filter(n => !m.value.rows.some(o => o.id === n.id))]
+            : [...got.rows, ...m.value.rows.filter(o => !got.rows.some(n => n.id === o.id))];
+          if (!after && sameMessageRows(m.value.rows, nextRows)) return m;
+          return {
+            state: "ok",
+            value: {
+              rows: nextRows,
+              cursor: quiet ? m.value.cursor : got.cursor,
+              ...(previousAnchor ? { previousAnchor } : {}),
+            },
+          };
+        }
+        return { state: "ok", value: { rows: got.rows, cursor: got.cursor } };
+      });
+      return true;
+    } catch (e) {
+      if (request !== messageRequest.current) return true;
+      setIndexing(false);
+      setMessages(m => quiet && m.state === "ok" ? m : { state: "failed", text: errorText(e, "Messages could not be read.") });
+      return false;
+    }
+    finally {
+      if (!quiet && request === messageRequest.current) {
+        foregroundMessages.current = false;
+        setLoadingOlder(false);
+      }
+    }
   }, [scope, id]);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [inserted, setInserted] = useState<{ text: string; n: number } | null>(null);
   const [assistNote, setAssistNote] = useState<string | null>(null);
-  const readDraft = useCallback(async () => {
-    if (!assist.show) { setDraft(null); return; }
+  const readDraft = useCallback(async (): Promise<boolean> => {
+    if (!assist.show) { setDraft(null); return true; }
     // A failed read keeps what is shown: the chip never invents or drops a draft.
-    try { setDraft(parseDraft(await serviceCall(scope, "whatsapp.draft.show", { conversation_id: id }))); } catch { /* next poll retries */ }
+    try {
+      const nextDraft = parseDraft(await serviceCall(scope, "whatsapp.draft.show", { conversation_id: id }));
+      setDraft(prev => prev === nextDraft || (!!prev && !!nextDraft && prev.draftId === nextDraft.draftId && prev.text === nextDraft.text) ? prev : nextDraft);
+      return true;
+    } catch { return false; /* next poll retries */ }
   }, [scope, id, assist.show]);
   useEffect(() => {
     void readDraft();
-    if (!assist.show) return;
-    const t = setInterval(() => { void readDraft(); }, DRAFT_POLL_MS);
-    return () => clearInterval(t);
-  }, [readDraft, assist.show]);
+  }, [readDraft]);
+  useLivePoll({
+    enabled: assist.show,
+    poll: readDraft,
+    intervalMs: LIVE_POLL_MS,
+  });
   const reload = useCallback(() => { void show(); void read(); void readDraft(); }, [show, read, readDraft]);
-  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => {
+    if (initial?.conversationId === id) { void read(); void readDraft(); } else reload();
+    return () => { messageRequest.current++; foregroundMessages.current = false; };
+  }, [reload, read, readDraft, initial, id]);
   async function discard() {
     setAssistNote(null);
     try { await serviceCall(scope, "whatsapp.draft.discard", { conversation_id: id }); setDraft(null); }
@@ -108,35 +790,822 @@ function Thread({ scope, id, canReply, canTemplate, assist, handoff, onRecipient
   }
   // The reply went out: its draft is spent. A failed discard leaves the chip, never a retry loop.
   const onSent = useCallback(() => { if (assist.discard) void discard(); }, [assist.discard, scope, id]);
-  useOnPush(() => Promise.all([show(true), read(null, true)]));
+  const refreshThreadQuiet = useCallback(async (): Promise<boolean> => {
+    const results = await Promise.all([show(true), read(null, true)]);
+    return results[0] && results[1];
+  }, [show, read]);
+  useOnPush(refreshThreadQuiet);
+  useLivePoll({
+    enabled: conversation.state === "ok" || messages.state === "ok",
+    poll: refreshThreadQuiet,
+    intervalMs: LIVE_POLL_MS,
+  });
   const c = conversation.state === "ok" ? conversation.value : null;
-  const ordered = messages.state === "ok" ? [...messages.value.rows].sort((a, b) => (Date.parse(a.createdAt ?? "") || 0) - (Date.parse(b.createdAt ?? "") || 0)) : [];
-  return <article className="waba-card waba-conversation" aria-labelledby="waba-thread-title">
-    <header className="waba-head">
-      <Button size="sm" variant="ghost" className="waba-back" onClick={onBack}>Back</Button>
-      <h2 id="waba-thread-title">{c ? c.contact.name ?? c.contact.phone ?? "Unknown contact" : "Conversation"}</h2>
-      <Button size="sm" onClick={reload}>Refresh</Button>
+  const ordered = useMemo(() => messages.state === "ok"
+    ? [...messages.value.rows].sort((a, b) => (stamp(a.createdAt) ?? 0) - (stamp(b.createdAt) ?? 0))
+    : [], [messages]);
+  const composeId = scope.provider === "linked" && canReply && channel.hostCompose
+    && /^[A-Za-z0-9._:-]{1,128}@(s\.whatsapp\.net|lid|g\.us)$/.test(id) ? id : null;
+  const replyAvailability = useSyncExternalStore(channel.subscribeReplyAvailability, () => channel.availabilityFor(composeId));
+  const replyInset = useSyncExternalStore(channel.subscribeReplyAvailability, () => channel.insetFor(composeId));
+  useLayoutEffect(() => {
+    if (composeId === null) return;
+    channel.nominateConversation(composeId);
+    return () => channel.nominateConversation(null);
+  }, [composeId]);
+  useLayoutEffect(() => {
+    const pane = messagePane.current;
+    if (!pane) return;
+    // Details hides the dock without retiring this nomination. Keep the list
+    // extent through the zero inset and re-open so scrollTop cannot clamp.
+    if (replyInset === null) {
+      pane.removeAttribute("data-reply-overlay");
+      pane.style.removeProperty("--waba-reply-dock-height");
+    } else if (replyInset.px > 0) {
+      pane.setAttribute("data-reply-overlay", "");
+      pane.style.setProperty("--waba-reply-dock-height", `${replyInset.px}px`);
+    }
+  }, [replyInset]);
+  useLayoutEffect(() => {
+    const pane = timeline.current;
+    const anchor = messages.state === "ok" && messages.value.previousAnchor;
+    if (pane && anchor && !keepBottom.current && pane.contains(anchor.row)) {
+      pane.scrollTop += anchor.row.offsetTop - anchor.top;
+    }
+  }, [messages]);
+  useLayoutEffect(() => {
+    const pane = timeline.current;
+    if (!pane) return;
+    if (keepBottom.current) pane.scrollTop = pane.scrollHeight;
+    channel.acknowledgeReplyInset(replyInset);
+  }, [messages, details, replyInset]);
+  useLayoutEffect(() => {
+    const pane = messagePane.current;
+    if (composeId === null || !channel.hostReplyLayout || !pane) return;
+    const measure = () => {
+      if (!channel.hostReplyLayout) return;
+      if (details || lightboxId !== null || getComputedStyle(pane).visibility === "hidden") {
+        channel.publishReplyLayout(null);
+        return;
+      }
+      const width = document.documentElement.clientWidth;
+      if (!width) return;
+      const rect = pane.getBoundingClientRect();
+      const left = Math.max(0, Math.min(10000, Math.round(rect.left / width * 10000)));
+      const right = Math.max(0, Math.min(10000, Math.round(rect.right / width * 10000)));
+      if (left < right) channel.publishReplyLayout([left, right]);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(pane);
+    observer.observe(document.documentElement);
+    window.addEventListener("resize", measure);
+    const unsubscribe = channel.subscribeReplyAvailability(() => {
+      if (!channel.hostReplyLayout) observer.disconnect();
+    });
+    return () => {
+      unsubscribe();
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [composeId, details, lightboxId]);
+  const linked = scope.provider === "linked";
+  const headerRow: ConversationRow | null = c ?? (preview?.conversationId === id ? preview : null);
+  const phone = headerRow ? contactPhone(headerRow, linked) : null;
+  const workLink = inboxScope && headerRow?.work && validWorkRef(headerRow.work.ref, inboxScope) ? headerRow.work : null;
+  const record = workLink ? work.records.get(workLink.ref) : undefined;
+  const title = headerRow ? contactName(headerRow, phone, linked, zh, record?.name) : (zh ? "對話" : "Conversation");
+  const group = linked && id.endsWith("@g.us");
+  const subtitle = group ? (zh ? "WhatsApp 群組" : "WhatsApp group") : phone ?? phoneUnavailable(zh);
+  const detailsLabel = zh ? (group ? "群組詳情" : "聯絡人詳情") : (group ? "Group details" : "Contact details");
+  const identity = phone && phone !== title ? `${title}${zh ? "、" : ", "}${phone}` : title;
+  const mediaMessages = details ? ordered.filter(m => m.media !== null || m.previewJpeg !== null) : [];
+  const visualMedia = hostMediaDownload
+    ? ordered.filter(m => m.media?.available && (m.media.kind === "image" || m.media.kind === "video"))
+    : [];
+  const lightboxMessage = lightboxId ? ordered.find(m => m.id === lightboxId) ?? null : null;
+  const locale = zh ? "zh" : "en";
+  const day = dayFormat[locale], time = timeFormat[locale];
+  const dueDay = calendarDay(new Date());
+  const loadOlder = (cursor: string) => {
+    if (foregroundMessages.current) return;
+    void read(cursor);
+  };
+  return <article className="waba-conversation" aria-labelledby="waba-thread-title" onKeyDown={e => {
+    if (e.key === "Escape" && !e.defaultPrevented && lightboxId !== null) {
+      e.preventDefault();
+      setLightboxId(null);
+    }
+  }}>
+    <header className="waba-thread-head">
+      <Button size="sm" variant="ghost" className="waba-back" disabled={replyDirty} onClick={onBack}>{zh ? "返回" : "Back"}</Button>
+      <h2 id="waba-thread-title" tabIndex={-1}>
+        {headerRow ? <button className="waba-details-trigger" ref={detailsButton} type="button" disabled={!c} aria-haspopup="dialog" aria-expanded={details} aria-label={`${identity}${zh ? "：" : ": "}${detailsLabel}`} onClick={() => details ? closeDetails() : setDetails(true)}>
+          <Avatar name={title} phone={phone} group={group} />
+          <span className="waba-thread-identity">{title === phone ? <bdi dir="ltr">{phone}</bdi> : title}{subtitle !== title && <small className="waba-muted">{phone ? <bdi dir="ltr">{phone}</bdi> : subtitle}</small>}</span>
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M7.5 3v10m-4-10h9A1.5 1.5 0 0 1 14 4.5v7a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5v-7A1.5 1.5 0 0 1 3.5 3Z" /></svg>
+        </button> : title}
+      </h2>
+      {workLink && work.checked.has(workLink.ref) && (() => {
+        const currentState = effectiveThreadState(record, workLink.inboundVersion);
+        return <button type="button" className="waba-work-pill" disabled={!c} data-state={currentState} aria-haspopup="dialog" aria-expanded={details} onClick={() => details ? closeDetails() : setDetails(true)}>
+          <span className="waba-work-dot" aria-hidden="true" />
+          <span>{threadStateLabel(currentState, zh)}</span>
+        </button>;
+      })()}
     </header>
-    {c && <TakeoverBar scope={scope} id={id} handoffAt={c.handoffAt} rights={handoff} onChanged={() => { void show(); }} />}
-    {assist.brief && <Brief scope={scope} id={id} canOpen={assist.open} />}
-    {draft && <DraftChip draft={draft} canInsert={canReply && !!c && windowOpen(c)} canDiscard={assist.discard} note={assistNote} onInsert={() => setInserted(i => ({ text: draft.text, n: (i?.n ?? 0) + 1 }))} onDiscard={() => { void discard(); }} />}
-    {conversation.state === "loading" ? <Loading>Reading the conversation…</Loading>
-      : conversation.state === "failed" ? <ErrorNotice onRetry={() => { void show(); }}>{conversation.text}</ErrorNotice>
-      : <p className="waba-muted">{c!.contact.phone ?? ""}{c!.status ? ` · ${c!.status}` : ""} · last inbound {when(c!.lastInboundAt)}</p>}
-    {messages.state === "loading" ? <Loading>Reading messages…</Loading>
-      : messages.state === "failed" ? <ErrorNotice onRetry={() => { void read(); }}>{messages.text}</ErrorNotice>
-      : <>
-        {messages.value.cursor && <Button size="sm" onClick={() => { void read(messages.value.cursor); }}>Load older messages</Button>}
-        {!ordered.length ? <EmptyState title="No messages" name="messages" /> : <ol className="waba-messages" aria-label="Messages">{ordered.map(m =>
-          <li key={m.id} className="waba-message" data-direction={m.direction === "outbound" ? "outbound" : "inbound"}>
-            <p>{m.body ?? (m.type ? `[${m.type}]` : "")}</p>
-            <span className="waba-muted">{when(m.createdAt)}{m.status ? ` · ${m.status}` : ""}</span>
-          </li>)}</ol>}
-      </>}
-    {c && (canReply ? <Composer scope={scope} conversation={c} autoTakeover={handoff.set} inserted={inserted} onSent={onSent} onChanged={reload} />
-      : <Notice state="read-only">You can read this inbox. Only the workspace operator can reply.</Notice>)}
-    {c && canTemplate && <Button size="sm" onClick={() => { onRecipient(c); void patchRoute({ section: "templates", view: "list", record_id: null }).catch(() => undefined); }}>Send an approved template…</Button>}
+    <div className="waba-conversation-body">
+      <div className="waba-thread-main" ref={messagePane}>
+        {replyAvailability === "blocked" && <div className="waba-reply-availability" role="status">
+          <Notice state="blocked">
+            {zh ? "此對話暫時無法回覆，你仍可查看訊息。" : "Replies are unavailable for this chat. You can still read messages."}
+          </Notice>
+        </div>}
+        <div className="waba-history">
+          <div className="waba-timeline" tabIndex={0} role="region" aria-label={zh ? "訊息記錄" : "Message history"} ref={timeline} onKeyDown={e => {
+            // Native Home/End scroll animations can continue after Jump to latest.
+            if (e.target !== e.currentTarget || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || (e.key !== "Home" && e.key !== "End")) return;
+            e.preventDefault();
+            if (e.key === "End") jumpToLatest();
+            else e.currentTarget.scrollTo({ top: 0, behavior: "instant" });
+          }} onScroll={e => {
+            const pane = e.currentTarget, last = timelineScroll.current;
+            const top = pane.scrollTop, height = pane.clientHeight;
+            // A dock resize can clamp scrollTop and dispatch scroll before ResizeObserver.
+            // Only movement in the settled viewport changes whether the reader follows latest.
+            if (height !== last.height || pane.clientWidth !== last.width || top === last.top) return;
+            last.top = top;
+            keepBottom.current = pane.scrollHeight - top - height < 72;
+            setShowLatest(!keepBottom.current);
+          }}>
+            <div className="waba-timeline-inner">
+              {conversation.state === "failed" && <ErrorNotice onRetry={() => { void show(); }}>{conversation.text}</ErrorNotice>}
+              {messages.state === "loading" ? <ThreadSkeleton indexing={indexing} zh={zh} />
+                : messages.state === "failed" ? <ErrorNotice onRetry={() => { void read(); }}>{messages.text}</ErrorNotice>
+                : <>
+                  {messages.value.cursor && <div className="waba-history-more"><Button size="sm" loading={loadingOlder || indexing} onClick={() => loadOlder(messages.value.cursor!)}>{zh ? "載入較早訊息" : "Load older messages"}</Button></div>}
+                  {!ordered.length ? <EmptyState title={zh ? "沒有訊息" : "No messages"} name="messages" /> : <ol className="waba-messages" aria-label="Messages">{ordered.map((m, index) => {
+                  const at = stamp(m.createdAt), previous = stamp(ordered[index - 1]?.createdAt ?? null);
+                  const date = at === null ? null : day.format(at);
+                  return <Fragment key={m.id}>
+                    {date && (previous === null || day.format(previous) !== date) && <li className="waba-date">{date}</li>}
+                    <li className="waba-message" data-direction={m.direction === "outbound" ? "outbound" : "inbound"}>
+                      {scope.provider === "linked" && m.type === "unsupported"
+                        ? m.media
+                          ? <LinkedMediaMessage
+                              conversationId={id}
+                              message={m}
+                              media={m.media}
+                              loaded={loadedMedia.get(m.id) ?? null}
+                              canDownload={hostMediaDownload}
+                              zh={zh}
+                              unavailable={unavailablePreview}
+                              onLoadInline={loadInlineMedia}
+                              onOpenLightbox={() => setLightboxId(m.id)}
+                            />
+                          : m.previewJpeg
+                            ? <PhotoPreview key={m.previewJpeg} jpeg={m.previewJpeg} label={zh ? "相片預覽" : "Photo preview"} unavailable={unavailablePreview} />
+                            : <p className="waba-muted">{unavailablePreview}</p>
+                        : <p>{m.body ?? (m.type ? `[${m.type}]` : "")}</p>}
+                      {(at !== null || m.status) && <div className="waba-message-meta waba-muted">{at !== null && <time dateTime={m.createdAt!}>{time.format(at)}</time>}{m.status && <span>{m.status}</span>}</div>}
+                    </li>
+                  </Fragment>;
+                })}</ol>}
+              </>}
+            </div>
+          </div>
+          {showLatest && <div className="waba-jump"><Button size="sm" onClick={jumpToLatest}>{zh ? "跳至最新訊息" : "Jump to latest"}</Button></div>}
+        </div>
+        {/* The admitted linked composer is on the board. Official actions and
+            the local-composer/read-only footer stay on their existing path. */}
+        {c && composeId !== null && draft && <div className="waba-draft-dock">
+          <DraftChip
+            draft={draft}
+            zh={zh}
+            canInsert={false}
+            canDiscard={assist.discard}
+            note={assistNote}
+            onInsert={() => {}}
+            onCopy={typeof navigator !== "undefined" && typeof navigator.clipboard?.writeText === "function"
+              ? () => navigator.clipboard.writeText(draft.text)
+              : undefined}
+            onDiscard={() => { void discard(); }}
+          />
+        </div>}
+        {c && composeId === null && <footer className="waba-thread-footer">
+          <TakeoverBar scope={scope} id={id} handoffAt={c.handoffAt} rights={handoff} onChanged={() => { void show(); }} />
+          {assist.brief && <Brief scope={scope} id={id} canOpen={assist.open} />}
+          {draft && <DraftChip draft={draft} zh={zh} canInsert={canReply && (linked || windowOpen(c))} canDiscard={assist.discard} note={assistNote} onInsert={() => setInserted(i => ({ text: draft.text, n: (i?.n ?? 0) + 1 }))} onDiscard={() => { void discard(); }} />}
+          {canReply ? !(linked && channel.hostCompose) && <Composer scope={scope} conversationId={c.conversationId} handoffAt={c.handoffAt} freeformUntil={c.freeformUntil} open={scope.provider === "linked" || windowOpen(c)} autoTakeover={handoff.set} inserted={inserted} onSent={onSent} onChanged={reload} onDirtyChange={onReplyDirty} />
+            : <Notice state="read-only">You can read this inbox. Only the workspace operator can reply.</Notice>}
+          {canTemplate && <Button size="sm" disabled={replyDirty} onClick={() => onRecipient(c)}>{zh ? "使用已核准的範本…" : "Send an approved template…"}</Button>}
+        </footer>}
+      </div>
+    </div>
+    {details && c && <ContactDrawer
+      key={workLink?.ref ?? id}
+      scope={scope}
+      conversation={c}
+      conversationId={id}
+      workLink={workLink}
+      title={title}
+      subtitle={subtitle}
+      phone={phone}
+      group={group}
+      zh={zh}
+      avatar={<Avatar name={title} phone={phone} group={group} />}
+      mediaMessages={mediaMessages}
+      loadedMedia={loadedMedia}
+      hostMediaDownload={hostMediaDownload}
+      unavailablePreview={unavailablePreview}
+      dueDay={dueDay}
+      onSaved={onWork}
+      onDirty={onWorkDirty}
+      onLoadInline={loadInlineMedia}
+      onOpenLightbox={messageId => setLightboxId(messageId)}
+      onClose={closeDetails}
+    />}
+    {lightboxMessage?.media && <MediaLightbox
+      conversationId={id}
+      message={lightboxMessage}
+      media={lightboxMessage.media}
+      items={visualMedia}
+      loaded={loadedMedia.get(lightboxMessage.id) ?? null}
+      loadedMedia={loadedMedia}
+      zh={zh}
+      unavailable={unavailablePreview}
+      closeRef={closeLightboxButton}
+      onLoadInline={loadInlineMedia}
+      onSelect={messageId => setLightboxId(messageId)}
+      onClose={() => setLightboxId(null)}
+    />}
   </article>;
+}
+
+function PhotoPreview({ jpeg, label, unavailable, className }: { jpeg: string; label: string; unavailable: string; className?: string }) {
+  const [failed, setFailed] = useState(false);
+  return failed ? <p className="waba-muted">{unavailable}</p>
+    : <img className={className ?? "waba-photo-preview"} src={`data:image/jpeg;base64,${jpeg}`} alt={label} loading="lazy" decoding="async" onError={() => setFailed(true)} />;
+}
+
+function voiceWaveformHeights(seed: string): number[] {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 16777619);
+  return Array.from({ length: 24 }, (_, idx) => {
+    h = Math.imul(h ^ (idx + 17), 16777619);
+    return 24 + (Math.abs(h) % 72);
+  });
+}
+
+function unavailableReasonText(reason: LinkedMediaInfo["unavailableReason"], zh: boolean): string {
+  if (reason === "too_large") return zh ? "檔案超過 10 MB 下載限制。" : "Attachment exceeds the 10 MB limit.";
+  if (reason === "unsupported_type") return zh ? "不支援此媒體格式。" : "Unsupported media format.";
+  return zh ? "此訊息無法提供媒體下載。" : "Media is unavailable for this message.";
+}
+
+function LinkedMediaMessage({
+  conversationId,
+  message,
+  media,
+  loaded,
+  canDownload,
+  zh,
+  unavailable,
+  onLoadInline,
+  onOpenLightbox,
+}: {
+  conversationId: string;
+  message: Message;
+  media: LinkedMediaInfo;
+  loaded: { url: string; mimeType: string; fileName: string | null } | null;
+  canDownload: boolean;
+  zh: boolean;
+  unavailable: string;
+  onLoadInline: (messageId: string, priority?: "user" | "auto") => Promise<{ url: string; mimeType: string; fileName: string | null }>;
+  onOpenLightbox: () => void;
+}) {
+  const [loadingInline, setLoadingInline] = useState(false);
+  const [autoFailed, setAutoFailed] = useState(false);
+  const [inlineError, setInlineError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [savedName, setSavedName] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const autoTriedRef = useRef<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const pendingAudioPlay = useRef(false);
+  const [audioPlaying, setAudioPlaying] = useState(false);
+  const [audioTime, setAudioTime] = useState(0);
+  const [audioDuration, setAudioDuration] = useState(media.durationSeconds ?? 0);
+
+  useEffect(() => {
+    setAutoFailed(false);
+  }, [message.id]);
+
+  useEffect(() => {
+    setAudioDuration(media.durationSeconds ?? 0);
+  }, [media.durationSeconds]);
+
+  useEffect(() => {
+    if (
+      media.kind !== "image" ||
+      !media.available ||
+      !canDownload ||
+      loaded?.url ||
+      autoTriedRef.current === message.id
+    )
+      return;
+    autoTriedRef.current = message.id;
+    void onLoadInline(message.id, "auto").catch(() => {
+      setAutoFailed(true);
+    });
+  }, [
+    canDownload,
+    loaded?.url,
+    media.available,
+    media.kind,
+    message.id,
+    onLoadInline,
+  ]);
+
+  useEffect(() => {
+    if (loaded?.url && pendingAudioPlay.current && audioRef.current) {
+      pendingAudioPlay.current = false;
+      void audioRef.current.play().catch(() => undefined);
+    }
+  }, [loaded?.url]);
+
+  const label = media.fileName ?? mediaKindLabel(media, zh);
+  const summary = mediaMetaSummary(media);
+
+  async function toggleAudio() {
+    if (loaded?.url && audioRef.current) {
+      if (audioRef.current.paused) void audioRef.current.play().catch(() => undefined);
+      else audioRef.current.pause();
+      return;
+    }
+    if (loadingInline) return;
+    pendingAudioPlay.current = true;
+    setLoadingInline(true);
+    setInlineError(null);
+    try {
+      await onLoadInline(message.id, "user");
+    } catch (e) {
+      pendingAudioPlay.current = false;
+      setInlineError(errorText(e, zh ? "無法載入音訊。" : "Couldn’t load audio."));
+    } finally {
+      setLoadingInline(false);
+    }
+  }
+
+  async function saveFile() {
+    if (saving) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const saved = await channel.saveMedia(conversationId, message.id);
+      setSavedName(saved.fileName);
+    } catch (e) {
+      setSaveError(errorText(e, zh ? "無法下載檔案。" : "Couldn’t save attachment."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const caption = media.caption ? <p className="waba-media-caption">{media.caption}</p> : null;
+  const saveIcon = saving
+    ? <span className="waba-inline-spin" aria-hidden="true" />
+    : savedName
+    ? <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m5 12.5 4.2 4.2L19 7" /></svg>
+    : <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5M5 19h14" /></svg>;
+
+  if (!media.available) {
+    return <div className="waba-media-card">
+      {message.previewJpeg && <PhotoPreview key={message.previewJpeg} jpeg={message.previewJpeg} label={label} unavailable={unavailable} />}
+      <div className="waba-media-tile">
+        <span className="waba-media-badge">{mediaBadge(media)}</span>
+        <span className="waba-media-info">
+          <span className="waba-media-title">{label}</span>
+          {summary && <span className="waba-media-sub">{summary}</span>}
+        </span>
+      </div>
+      <p className="waba-muted">{unavailableReasonText(media.unavailableReason, zh)}</p>
+      {caption}
+    </div>;
+  }
+
+  if (!canDownload) {
+    return <div className="waba-media-card">
+      {message.previewJpeg
+        ? <PhotoPreview key={message.previewJpeg} jpeg={message.previewJpeg} label={label} unavailable={unavailable} />
+        : <div className="waba-media-tile">
+            <span className="waba-media-badge">{mediaBadge(media)}</span>
+            <span className="waba-media-info">
+              <span className="waba-media-title">{label}</span>
+              {summary && <span className="waba-media-sub">{summary}</span>}
+            </span>
+          </div>}
+      <p className="waba-muted">{zh ? "更新 Cadence 主機板即可檢視或下載完整媒體。" : "Update the Cadence board to view or save full media."}</p>
+      {caption}
+    </div>;
+  }
+
+  if (media.kind === "image") {
+    const ratio = mediaAspectRatio(media);
+    return <div className="waba-media-card">
+      <div className="waba-media-frame-wrap">
+        <button type="button" className="waba-media-frame" style={{ aspectRatio: String(ratio) }} aria-label={media.fileName ? `${zh ? "檢視圖片" : "View image"}: ${media.fileName}` : (zh ? "檢視完整圖片" : "View full image")} onClick={onOpenLightbox}>
+          {loaded?.url
+            ? <img className="waba-media-img" src={loaded.url} alt={label} loading="lazy" decoding="async" />
+            : message.previewJpeg
+            ? <PhotoPreview className="waba-media-img waba-media-blur" key={message.previewJpeg} jpeg={message.previewJpeg} label={label} unavailable={unavailable} />
+            : !autoFailed
+            ? <span className="waba-media-shimmer" aria-hidden="true" />
+            : <span className="waba-media-tile">
+                <span className="waba-media-badge">IMG</span>
+                <span className="waba-media-info">
+                  <span className="waba-media-title">{label}</span>
+                  {summary && <span className="waba-media-sub">{summary}</span>}
+                </span>
+              </span>}
+          <span className="waba-media-hover-badge" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 4h5v5M9 20H4v-5M20 4l-6 6M4 20l6-6" /></svg>
+          </span>
+        </button>
+      </div>
+      {caption}
+    </div>;
+  }
+
+  if (media.kind === "audio") {
+    const bars = voiceWaveformHeights(message.id);
+    const totalDur = audioDuration > 0 ? audioDuration : (media.durationSeconds ?? 0);
+    const ratio = totalDur > 0 ? Math.max(0, Math.min(1, audioTime / totalDur)) : 0;
+    const totalLabel = formatMediaDuration(totalDur);
+    const elapsedLabel = formatMediaDuration(audioTime);
+    const timeText = (audioPlaying || audioTime > 0) && totalLabel
+      ? `${elapsedLabel ?? "0:00"} / ${totalLabel}`
+      : totalLabel ?? mediaKindLabel(media, zh);
+    const byteText = formatMediaBytes(media.byteLength);
+    return <div className="waba-media-card">
+      {loaded?.url && <audio
+        ref={audioRef}
+        className="waba-media-audio-hidden"
+        preload="metadata"
+        src={loaded.url}
+        onLoadedMetadata={e => {
+          const d = e.currentTarget.duration;
+          if (Number.isFinite(d) && d > 0) setAudioDuration(d);
+        }}
+        onTimeUpdate={e => setAudioTime(e.currentTarget.currentTime)}
+        onPlay={() => setAudioPlaying(true)}
+        onPause={() => setAudioPlaying(false)}
+        onEnded={() => {
+          setAudioPlaying(false);
+          setAudioTime(0);
+        }}
+      />}
+      <div className="waba-voice-card">
+        <button
+          type="button"
+          className="waba-voice-play-btn"
+          aria-label={audioPlaying ? (zh ? "暫停音訊" : "Pause audio") : (zh ? "播放音訊" : "Play audio")}
+          disabled={loadingInline}
+          aria-busy={loadingInline || undefined}
+          onClick={() => { void toggleAudio(); }}
+        >
+          {loadingInline
+            ? <span className="waba-inline-spin" aria-hidden="true" />
+            : audioPlaying
+            ? <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><rect x="7" y="5.5" width="3.5" height="13" rx="1" /><rect x="13.5" y="5.5" width="3.5" height="13" rx="1" /></svg>
+            : <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="m8 5.5 11 6.5-11 6.5Z" /></svg>}
+        </button>
+        <div className="waba-voice-col">
+          <div
+            className="waba-voice-bars"
+            data-ready={loaded?.url ? "true" : "false"}
+            aria-hidden="true"
+            onClick={e => {
+              if (!audioRef.current || !loaded?.url || totalDur <= 0) return;
+              const rect = e.currentTarget.getBoundingClientRect();
+              if (rect.width <= 0) return;
+              const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+              audioRef.current.currentTime = frac * totalDur;
+              setAudioTime(frac * totalDur);
+            }}
+          >
+            {bars.map((h, i) => (
+              <span
+                key={i}
+                className="waba-voice-bar"
+                data-played={(i / bars.length) < ratio ? "true" : undefined}
+                style={{ height: `${h}%` }}
+              />
+            ))}
+          </div>
+          <div className="waba-voice-foot">
+            <span>{timeText}</span>
+            {byteText && <span>{byteText}</span>}
+          </div>
+        </div>
+        <button
+          type="button"
+          className="waba-media-icon-btn"
+          data-saved={savedName ? "true" : undefined}
+          aria-label={savedName ? (zh ? `已儲存 ${savedName}` : `Saved ${savedName}`) : (zh ? "下載音訊" : "Save audio")}
+          title={savedName ? (zh ? `已儲存 ${savedName}` : `Saved ${savedName}`) : (zh ? "下載" : "Save")}
+          disabled={saving}
+          aria-busy={saving || undefined}
+          onClick={() => { void saveFile(); }}
+        >
+          {saveIcon}
+        </button>
+      </div>
+      {inlineError && <ErrorNotice bare>{inlineError}</ErrorNotice>}
+      {saveError && <ErrorNotice bare>{saveError}</ErrorNotice>}
+      {caption}
+    </div>;
+  }
+
+  if (media.kind === "video") {
+    const ratio = mediaAspectRatio(media);
+    const dur = formatMediaDuration(media.durationSeconds);
+    return <div className="waba-media-card">
+      <div className="waba-media-frame-wrap">
+        <button type="button" className="waba-media-frame" style={{ aspectRatio: String(ratio) }} aria-label={media.fileName ? `${zh ? "播放影片" : "Play video"}: ${media.fileName}` : (zh ? "播放影片" : "Play video")} onClick={onOpenLightbox}>
+          {message.previewJpeg
+            ? <PhotoPreview className="waba-media-img" key={message.previewJpeg} jpeg={message.previewJpeg} label={label} unavailable={unavailable} />
+            : <span className="waba-video-poster-fallback" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="5" width="18" height="14" rx="2" /></svg>
+              </span>}
+          <span className="waba-video-play-ring" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" style={{ marginLeft: "2px" }}><path d="m8 5.5 11 6.5-11 6.5Z" /></svg>
+          </span>
+          {dur && <span className="waba-video-dur-pill">{dur}</span>}
+        </button>
+        <button
+          type="button"
+          className="waba-media-save-corner"
+          data-saved={savedName ? "true" : undefined}
+          aria-label={savedName ? (zh ? `已儲存 ${savedName}` : `Saved ${savedName}`) : (zh ? "下載影片" : "Save video")}
+          title={savedName ? (zh ? `已儲存 ${savedName}` : `Saved ${savedName}`) : (zh ? "下載" : "Save")}
+          disabled={saving}
+          aria-busy={saving || undefined}
+          onClick={e => {
+            e.stopPropagation();
+            void saveFile();
+          }}
+        >
+          {saveIcon}
+        </button>
+      </div>
+      {saveError && <ErrorNotice bare>{saveError}</ErrorNotice>}
+      {caption}
+    </div>;
+  }
+
+  const docMeta = [formatMediaBytes(media.byteLength), mediaBadge(media)].filter(Boolean).join(" · ");
+  return <div className="waba-media-card">
+    <div className="waba-doc-card">
+      <span className="waba-doc-badge" data-ext={mediaExtTone(media)}>{mediaBadge(media)}</span>
+      <span className="waba-doc-meta">
+        <span className="waba-doc-name" title={label}>{label}</span>
+        {docMeta && <span className="waba-doc-sub">{docMeta}</span>}
+      </span>
+      <button
+        type="button"
+        className="waba-media-icon-btn"
+        data-saved={savedName ? "true" : undefined}
+        aria-label={savedName ? (zh ? `已下載 ${savedName}` : `Saved ${savedName}`) : saveError ? (zh ? "重試下載" : "Retry download") : (zh ? `下載 ${label}` : `Download ${label}`)}
+        title={savedName ? (zh ? `已下載 ${savedName}` : `Saved ${savedName}`) : (zh ? "下載" : "Download")}
+        disabled={saving}
+        aria-busy={saving || undefined}
+        onClick={() => { void saveFile(); }}
+      >
+        {saveIcon}
+      </button>
+    </div>
+    {saveError && <ErrorNotice bare>{saveError}</ErrorNotice>}
+    {caption}
+  </div>;
+}
+
+function MediaLightbox({
+  conversationId,
+  message,
+  media,
+  items,
+  loaded,
+  loadedMedia,
+  zh,
+  unavailable,
+  closeRef,
+  onLoadInline,
+  onSelect,
+  onClose,
+}: {
+  conversationId: string;
+  message: Message;
+  media: LinkedMediaInfo;
+  items: Message[];
+  loaded: { url: string; mimeType: string; fileName: string | null } | null;
+  loadedMedia: Map<string, { url: string; mimeType: string; fileName: string | null }>;
+  zh: boolean;
+  unavailable: string;
+  closeRef: RefObject<HTMLButtonElement | null>;
+  onLoadInline: (messageId: string, priority?: "user" | "auto") => Promise<{ url: string; mimeType: string; fileName: string | null }>;
+  onSelect: (messageId: string) => void;
+  onClose: () => void;
+}) {
+  const [loading, setLoading] = useState(!loaded?.url);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [savedName, setSavedName] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [zoomed, setZoomed] = useState(false);
+
+  const idx = items.findIndex(m => m.id === message.id);
+  const prevItem = idx > 0 ? items[idx - 1] : null;
+  const nextItem = idx >= 0 && idx < items.length - 1 ? items[idx + 1] : null;
+
+  useEffect(() => {
+    setZoomed(false);
+    setSavedName(null);
+    setSaveError(null);
+    setLoadError(null);
+  }, [message.id]);
+
+  const retryLoad = useCallback(() => {
+    setLoading(true);
+    setLoadError(null);
+    void onLoadInline(message.id, "user").then(
+      () => setLoading(false),
+      (e: unknown) => {
+        setLoadError(errorText(e, media.kind === "video" ? (zh ? "無法載入影片。" : "Couldn’t load video.") : (zh ? "無法載入完整相片。" : "Couldn’t load full photo.")));
+        setLoading(false);
+      },
+    );
+  }, [media.kind, message.id, onLoadInline, zh]);
+
+  useEffect(() => {
+    if (!loaded?.url) retryLoad();
+    else setLoading(false);
+  }, [loaded?.url, retryLoad]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        onClose();
+        return;
+      }
+      if (e.key === "ArrowLeft" && prevItem) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        onSelect(prevItem.id);
+        return;
+      }
+      if (e.key === "ArrowRight" && nextItem) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        onSelect(nextItem.id);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [nextItem, onClose, onSelect, prevItem]);
+
+  async function saveImage() {
+    if (saving) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const res = await channel.saveMedia(conversationId, message.id);
+      setSavedName(res.fileName);
+    } catch (e) {
+      setSaveError(errorText(e, zh ? "無法下載媒體。" : "Couldn’t save media."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const title = media.fileName ?? mediaKindLabel(media, zh);
+  const summary = mediaMetaSummary(media);
+  const poster = message.previewJpeg ? `data:image/jpeg;base64,${message.previewJpeg}` : undefined;
+  return <div className="waba-lightbox-backdrop" role="dialog" aria-modal="true" aria-labelledby="waba-lightbox-title" onClick={e => {
+    if (e.target === e.currentTarget) onClose();
+  }} onKeyDown={e => {
+    if (e.key === "Escape") { e.preventDefault(); onClose(); }
+  }}>
+    <header className="waba-lightbox-bar">
+      <div className="waba-lightbox-file">
+        <h3 id="waba-lightbox-title">{title}</h3>
+        {summary && <p>{summary}</p>}
+      </div>
+      {items.length > 1 && idx >= 0
+        ? <span className="waba-lightbox-counter">{idx + 1} / {items.length}</span>
+        : <span aria-hidden="true" />}
+      <div className="waba-lightbox-actions">
+        {media.kind === "image" && loaded?.url && (
+          <button type="button" className="waba-lightbox-ico-btn" onClick={() => setZoomed(z => !z)}>
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 5 5M8.5 10.5h4" />{!zoomed && <path d="M10.5 8.5v4" />}</svg>
+            <span className="waba-lightbox-ico-label">{zoomed ? (zh ? "還原" : "Fit") : (zh ? "放大" : "Zoom")}</span>
+          </button>
+        )}
+        <button
+          type="button"
+          className="waba-lightbox-ico-btn"
+          data-saved={savedName ? "true" : undefined}
+          disabled={saving}
+          aria-busy={saving || undefined}
+          onClick={() => { void saveImage(); }}
+        >
+          {saving
+            ? <span className="waba-inline-spin" aria-hidden="true" />
+            : savedName
+            ? <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m5 12.5 4.2 4.2L19 7" /></svg>
+            : <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5M5 19h14" /></svg>}
+          <span className="waba-lightbox-ico-label">{savedName ? (zh ? "已儲存" : "Saved") : (zh ? "下載" : "Save")}</span>
+        </button>
+        <button ref={closeRef} type="button" className="waba-lightbox-ico-btn" aria-label={zh ? "關閉" : "Close"} onClick={onClose}>
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+        </button>
+      </div>
+    </header>
+    <div className="waba-lightbox-stage" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      {items.length > 1 && (
+        <button
+          type="button"
+          className="waba-lightbox-nav"
+          data-dir="prev"
+          disabled={!prevItem}
+          aria-label={zh ? "上一個媒體" : "Previous media"}
+          onClick={() => { if (prevItem) onSelect(prevItem.id); }}
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 6-6 6 6 6" /></svg>
+        </button>
+      )}
+      <div className="waba-lightbox-media-wrap">
+        {media.kind === "video"
+          ? loaded?.url
+            ? <video key={loaded.url} className="waba-lightbox-video" controls playsInline autoPlay poster={poster} src={loaded.url} />
+            : message.previewJpeg
+            ? <PhotoPreview className="waba-lightbox-poster" jpeg={message.previewJpeg} label={title} unavailable={unavailable} />
+            : null
+          : loaded?.url
+          ? <img className="waba-lightbox-img" src={loaded.url} alt={title} data-zoomed={zoomed ? "true" : undefined} onClick={() => setZoomed(z => !z)} />
+          : message.previewJpeg
+          ? <PhotoPreview className="waba-lightbox-img" key={message.previewJpeg} jpeg={message.previewJpeg} label={title} unavailable={unavailable} />
+          : null}
+        {loading && <div className="waba-lightbox-loading-pill" role="status">
+          <span className="waba-inline-spin" aria-hidden="true" />
+          <span>{media.kind === "video" ? (zh ? "正在載入影片…" : "Loading video…") : (zh ? "正在載入完整相片…" : "Loading full image…")}</span>
+        </div>}
+        {loadError && <ErrorNotice onRetry={retryLoad}>{loadError}</ErrorNotice>}
+      </div>
+      {items.length > 1 && (
+        <button
+          type="button"
+          className="waba-lightbox-nav"
+          data-dir="next"
+          disabled={!nextItem}
+          aria-label={zh ? "下一個媒體" : "Next media"}
+          onClick={() => { if (nextItem) onSelect(nextItem.id); }}
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+        </button>
+      )}
+    </div>
+    <footer className="waba-lightbox-foot">
+      {media.caption && <p className="waba-media-caption">{media.caption}</p>}
+      {savedName && <p className="waba-muted" role="status">{zh ? `已儲存 ${savedName}` : `Saved ${savedName}`}</p>}
+      {saveError && <ErrorNotice bare>{saveError}</ErrorNotice>}
+      {items.length > 1 && <div className="waba-lightbox-thumbs">
+        {items.map(item => {
+          const itemLoaded = loadedMedia.get(item.id);
+          const itemThumbSrc = (item.media?.kind !== "video" && itemLoaded?.url && itemLoaded.mimeType.toLowerCase().startsWith("image/") ? itemLoaded.url : null)
+            ?? (item.previewJpeg ? `data:image/jpeg;base64,${item.previewJpeg}` : null);
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className="waba-lightbox-thumb"
+              aria-current={item.id === message.id ? "true" : undefined}
+              aria-label={item.media?.fileName ?? (item.media ? mediaKindLabel(item.media, zh) : (zh ? "媒體" : "Media"))}
+              onClick={() => onSelect(item.id)}
+            >
+              {itemThumbSrc
+                ? <img src={itemThumbSrc} alt="" loading="lazy" decoding="async" />
+                : <span className="waba-lightbox-thumb-fallback">{item.media ? mediaBadge(item.media) : "IMG"}</span>}
+              {item.media?.kind === "video" && <span className="waba-lightbox-thumb-play" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="8" height="8" fill="currentColor"><path d="m8 5.5 11 6.5-11 6.5Z" /></svg>
+              </span>}
+            </button>
+          );
+        })}
+      </div>}
+    </footer>
+  </div>;
 }
 
 function Brief({ scope, id, canOpen }: { scope: DisplayScope; id: string; canOpen: boolean }) {
@@ -164,13 +1633,39 @@ function Brief({ scope, id, canOpen }: { scope: DisplayScope; id: string; canOpe
   </div>;
 }
 
-function DraftChip({ draft, canInsert, canDiscard, note, onInsert, onDiscard }: { draft: Draft; canInsert: boolean; canDiscard: boolean; note: string | null; onInsert: () => void; onDiscard: () => void }) {
+function DraftChip({ draft, zh, canInsert, canDiscard, note, onInsert, onCopy, onDiscard }: {
+  draft: Draft;
+  zh: boolean;
+  canInsert: boolean;
+  canDiscard: boolean;
+  note: string | null;
+  onInsert: () => void;
+  onCopy?: () => Promise<void> | void;
+  onDiscard: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (copyTimer.current !== null) clearTimeout(copyTimer.current); }, []);
+  useEffect(() => { setCopied(false); }, [draft.draftId, draft.text]);
+  async function copy() {
+    if (!onCopy) return;
+    try {
+      await onCopy();
+      setCopied(true);
+      if (copyTimer.current !== null) clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => { setCopied(false); copyTimer.current = null; }, 2000);
+    } catch {
+      setCopied(false);
+    }
+  }
+  const showCopy = !canInsert && !!onCopy;
   return <Notice state="assistant-draft">
-    <strong>Assistant draft</strong>
+    <strong>{zh ? "助理草稿" : "Assistant draft"}</strong>
     <blockquote className="waba-quote">{draft.text}</blockquote>
-    {(canInsert || canDiscard) && <div className="waba-head">
-      {canInsert && <Button size="sm" onClick={onInsert}>Insert</Button>}
-      {canDiscard && <Button size="sm" variant="ghost" onClick={onDiscard}>Discard</Button>}
+    {(canInsert || showCopy || canDiscard) && <div className="waba-head">
+      {canInsert && <Button size="sm" onClick={onInsert}>{zh ? "插入" : "Insert"}</Button>}
+      {showCopy && <Button size="sm" onClick={() => { void copy(); }}>{copied ? (zh ? "已複製" : "Copied") : (zh ? "複製" : "Copy")}</Button>}
+      {canDiscard && <Button size="sm" variant="ghost" onClick={onDiscard}>{zh ? "捨棄" : "Discard"}</Button>}
     </div>}
     {note && <p className="waba-muted" role="alert">{note}</p>}
   </Notice>;
@@ -212,12 +1707,22 @@ function TakeoverBar({ scope, id, handoffAt, rights, onChanged }: { scope: Displ
  *  approval SLOT over exactly the prepared text. Nothing is retried. */
 type Attempt = { text: string; effectId: string } & ({ state: "approving" } | { state: ReplyState } | { state: "checking" } | { state: "status"; status: ReplyStatus } | { state: "cancelled"; reason: string | null });
 
-function Composer({ scope, conversation, autoTakeover, inserted, onSent, onChanged }: { scope: DisplayScope; conversation: Conversation; autoTakeover: boolean; inserted: { text: string; n: number } | null; onSent: () => void; onChanged: () => void }) {
+function Composer({ scope, conversationId, handoffAt, freeformUntil, open, autoTakeover, inserted, onSent, onChanged, onDirtyChange }: { scope: DisplayScope; conversationId: string; handoffAt: string | null; freeformUntil: string | null; open: boolean; autoTakeover: boolean; inserted: { text: string; n: number } | null; onSent: () => void; onChanged: () => void; onDirtyChange: (dirty: boolean) => void }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState<Attempt | null>(null);
-  const open = windowOpen(conversation);
+  const input = useRef<HTMLTextAreaElement>(null);
+  const submitting = useRef(false);
+  const zh = useScope()?.presentationLocale === "zh-TW";
+  useLayoutEffect(() => {
+    const box = input.current;
+    if (!box) return;
+    box.style.height = "auto";
+    box.style.height = `${box.scrollHeight}px`;
+  }, [text, open]);
+  useEffect(() => { onDirtyChange(!!text || busy || !!attempt && !["sent", "accepted", "failed", "refused", "cancelled"].includes(attempt.state)); }, [text, busy, attempt, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
   // Insert only fills the text for editing; nothing is prepared until Send…
   useEffect(() => { if (inserted) setText(inserted.text); }, [inserted]);
   async function approve(frozen: { text: string; effectId: string }) {
@@ -225,11 +1730,11 @@ function Composer({ scope, conversation, autoTakeover, inserted, onSent, onChang
     try {
       // The SLOT carries the exact prepared text; the host recomputes the
       // digest and refuses any difference.
-      const done = await serviceSlot(scope, "whatsapp.reply.send", { conversation_id: conversation.conversationId, text: frozen.text, effect_id: frozen.effectId });
+      const done = await serviceSlot(scope, "whatsapp.reply.send", { conversation_id: conversationId, text: frozen.text, effect_id: frozen.effectId });
       const state = sendState(done);
       setAttempt({ ...frozen, state });
-      if (state === "sent" || state === "uncertain") setText("");
-      if (state === "sent") onSent();
+      if (state === "sent" || state === "accepted" || state === "uncertain") setText("");
+      if (state === "sent" || state === "accepted") onSent();
     } catch (e) {
       // A refused card may be a cancel or a host refusal: the host record decides.
       await check(frozen, e);
@@ -237,65 +1742,79 @@ function Composer({ scope, conversation, autoTakeover, inserted, onSent, onChang
     onChanged();
   }
   // `refusal` is what ended the card; with it, a still-prepared effect was not sent.
-  async function check(frozen: { text: string; effectId: string }, refusal?: unknown) {
+  async function check(frozen: { text: string; effectId: string }, refusal?: unknown, preserveDraft = false) {
     setAttempt({ ...frozen, state: "checking" });
     try {
       const status = parseReplyStatus(await serviceCall(scope, "whatsapp.reply.status", { effect_id: frozen.effectId }));
       const cancelled = refusal !== undefined && status.state === "prepared";
       setAttempt(cancelled ? { ...frozen, state: "cancelled", reason: declinedReason(refusal).cancelled ? null : declinedReason(refusal).text } : { ...frozen, state: "status", status });
       // Anything that may have left the host is never offered for resend.
-      if (!cancelled && !["prepared", "failed", "refused"].includes(status.state)) setText("");
-      if (status.state === "sent") onSent();
-    } catch { setAttempt({ ...frozen, state: "uncertain" }); setText(""); }
+      if (!preserveDraft && !cancelled && !["prepared", "failed", "refused"].includes(status.state)) setText("");
+      if (status.state === "sent" || status.state === "accepted") onSent();
+    } catch { setAttempt({ ...frozen, state: "uncertain" }); if (!preserveDraft) setText(""); }
   }
   async function send() {
     const frozen = text;
-    if (!frozen.trim() || busy) return;
+    if (!frozen.trim() || submitting.current) return;
+    submitting.current = true;
     setBusy(true); setError(null); setAttempt(null);
     try {
       // Replying by hand pauses FavCRM's AI first. If that fails nothing is prepared.
-      if (autoTakeover && !conversation.handoffAt) {
-        try { await serviceCall(scope, "whatsapp.handoff.set", { conversation_id: conversation.conversationId }); }
+      if (autoTakeover && !handoffAt) {
+        try { await serviceCall(scope, "whatsapp.handoff.set", { conversation_id: conversationId }); }
         catch (e) { setError(`Nothing was prepared: FavCRM's AI could not be paused. ${errorText(e, "The takeover was refused.")}`); onChanged(); return; }
         onChanged();
       }
-      const prepared = parsePrepared(await serviceCall(scope, "whatsapp.reply.prepare", { conversation_id: conversation.conversationId, text: frozen }));
+      const prepared = parsePrepared(await serviceCall(scope, "whatsapp.reply.prepare", { conversation_id: conversationId, text: frozen }));
       await approve({ text: frozen, effectId: prepared.effect_id });
     } catch (e) {
       // Refusal codes are generic here; the re-read shows a closed window.
       setError(errorText(e, "The reply could not be prepared. Nothing was sent."));
       onChanged();
-    } finally { setBusy(false); }
+    } finally { submitting.current = false; setBusy(false); }
   }
   // While an attempt's outcome is open, the composer is locked so the same
   // reply is never sent twice. The outcome stays visible if the window closes.
-  const locked = !!attempt && !["sent", "failed", "refused", "cancelled"].includes(attempt.state);
-  const outcome = attempt && <Outcome attempt={attempt} onCheck={() => { void check(attempt); }} onApproveAgain={() => { void approve(attempt); }} onDismiss={() => setAttempt(null)} />;
+  const locked = !!attempt && !["sent", "accepted", "failed", "refused", "cancelled"].includes(attempt.state);
+  const outcome = attempt && <Outcome attempt={attempt} linked={scope.provider === "linked"} group={conversationId.endsWith("@g.us")} onCheck={() => { void check(attempt, undefined, true); }} onApproveAgain={() => { void approve(attempt); }} onDismiss={() => setAttempt(null)} />;
   if (!open) return <div className="waba-composer">{outcome}<Notice state="window-closed">The 24-hour reply window is closed, so free text can&apos;t be sent to this customer. An approved template can still be sent.</Notice></div>;
-  return <form className="waba-composer" onSubmit={e => { e.preventDefault(); void send(); }}>
+  const review = zh ? "檢查並核准回覆" : "Review reply";
+  return <div className="waba-composer">
     {outcome}
     {error && <ErrorNotice bare>{error}</ErrorNotice>}
-    <Field label="Reply" hint={`Window open until ${when(conversation.freeformUntil)}. You approve the exact text before it is sent.`}>
-      {c => <textarea {...c} className="field" rows={3} maxLength={4096} value={text} disabled={busy || locked} onChange={e => setText(e.target.value)} />}
-    </Field>
-    <Button type="submit" variant="primary" loading={busy} disabled={locked || !text.trim()}>Send…</Button>
-  </form>;
+    <form className="waba-compose-box" onSubmit={e => { e.preventDefault(); if (open && !locked) void send(); }}>
+      <textarea ref={input} aria-label={zh ? "回覆" : "Reply"} placeholder={zh ? "輸入回覆…" : "Write a reply…"} rows={1} maxLength={4096} value={text} disabled={busy || locked} onChange={e => setText(e.target.value)} onKeyDown={e => {
+        if (e.key !== "Enter" || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing || e.keyCode === 229) return;
+        e.preventDefault();
+        if (!e.repeat && !busy && !locked) void send();
+      }} />
+      <div className="waba-compose-foot">
+        {text && !busy && !locked && <Button size="sm" variant="ghost" onClick={() => { setText(""); input.current?.focus(); }}>{zh ? "清除草稿" : "Clear draft"}</Button>}
+        <span className="waba-muted">{zh ? "Enter 檢查回覆 · Shift+Enter 換行" : "Enter to review · Shift+Enter for a new line"}{freeformUntil && scope.provider !== "linked" ? ` · ${when(freeformUntil)}` : ""}</span>
+        <button className="waba-compose-send" type="submit" aria-label={review} title={review} disabled={busy || locked || !text.trim()}>
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6" /></svg>
+        </button>
+      </div>
+    </form>
+  </div>;
 }
 
-function Outcome({ attempt, onCheck, onApproveAgain, onDismiss }: { attempt: Attempt; onCheck: () => void; onApproveAgain: () => void; onDismiss: () => void }) {
+function Outcome({ attempt, linked, group, onCheck, onApproveAgain, onDismiss }: { attempt: Attempt; linked: boolean; group: boolean; onCheck: () => void; onApproveAgain: () => void; onDismiss: () => void }) {
   const quote = <blockquote className="waba-quote">{attempt.text}</blockquote>;
+  const groupNote = "WhatsApp accepted this group message; group delivery confirmation is unavailable.";
   switch (attempt.state) {
     case "approving": return <Notice state="approving">Waiting for your approval in the Cadence card…</Notice>;
     case "checking": return <Loading>Reading this reply&apos;s recorded status…</Loading>;
-    case "sent": return <Notice state="sent">Sent: FavCRM accepted the reply. Delivery shows on the message once WhatsApp reports it. <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></Notice>;
-    case "failed": return <ErrorNotice>Failed: FavCRM did not send this reply. Your text is still in the composer. <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></ErrorNotice>;
+    case "sent": return <Notice state="sent">{linked ? group ? groupNote : "Delivery confirmed." : "Sent: FavCRM accepted the reply. Delivery shows on the message once WhatsApp reports it."} <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></Notice>;
+    case "accepted": return <Notice state="sent">{linked ? group ? groupNote : "WhatsApp accepted this message; recipient delivery is not confirmed." : "The provider accepted this message; recipient delivery is not confirmed."} {linked && !group && <Button size="sm" onClick={onCheck}>Check delivery</Button>} <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></Notice>;
+    case "failed": return <ErrorNotice>{linked ? "The linked device did not dispatch this reply." : "Failed: FavCRM did not send this reply."} Your text is still in the composer. <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></ErrorNotice>;
     case "refused": return <ErrorNotice>Refused: the reply was not sent (for example the window closed or the approval was declined). <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></ErrorNotice>;
     case "cancelled": return <Notice state="cancelled">{attempt.reason ? `Not sent: ${attempt.reason}` : "Not sent: the approval was cancelled."} <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></Notice>;
     case "pending": return <Notice state="pending">Waiting for the owner&apos;s approval in AgenticOS. Nothing has been sent. Once it is approved, confirm the same reply again.{quote}
       <Button size="sm" onClick={onApproveAgain}>Confirm this reply again</Button></Notice>;
-    case "status": return <Notice state={`status-${attempt.status.state}`}>Recorded status: <strong>{attempt.status.state}</strong>{attempt.status.door ? ` (door: ${attempt.status.door})` : ""}. Check the messages above; this reply is never resent automatically.{quote}
+    case "status": return <Notice state={`status-${attempt.status.state}`}>Recorded status: <strong>{attempt.status.state}</strong>{attempt.status.door ? ` (door: ${attempt.status.door})` : ""}. {linked && group && ["sent", "accepted"].includes(attempt.status.state) ? "Group delivery confirmation is unavailable." : linked && attempt.status.state === "sent" ? "Delivery confirmed." : linked && attempt.status.state === "accepted" ? "WhatsApp accepted the message; recipient delivery is not confirmed." : linked ? "Verify with the recipient before sending again." : "Check the messages above; this reply is never resent automatically."}{quote}
       <Button size="sm" onClick={onCheck}>Check again</Button> <Button size="sm" variant="ghost" onClick={onDismiss}>Dismiss</Button></Notice>;
-    default: return <ErrorNotice>Uncertain: Cadence can&apos;t tell whether this reply was sent, so it will never be resent. Check its status and the messages above before replying again.{quote}
+    default: return <ErrorNotice>Uncertain: Cadence can&apos;t tell whether this reply was sent, so it will never be resent. {linked ? "Check its status and verify with the recipient before sending again." : "Check its status and the messages above before replying again."}{quote}
       <Button size="sm" onClick={onCheck}>Check status</Button></ErrorNotice>;
   }
 }

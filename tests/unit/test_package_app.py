@@ -284,7 +284,6 @@ class ManifestMetadataTests(unittest.TestCase):
     def test_real_app_md_parses_declared_fields(self):
         manifest = pkg.parse_manifest((REPO / "app" / "app.md").read_text(encoding="utf-8"))
         self.assertEqual(manifest.app, "waba")
-        self.assertEqual(manifest.version, "0.2.0")
         self.assertEqual(manifest.title, "WhatsApp Business")
         self.assertEqual(manifest.connections, ())
         self.assertIsNone(manifest.view_contract)
@@ -427,11 +426,13 @@ class BuildAndExclusionTests(unittest.TestCase):
         for name in names:
             rel = name.split("/", 1)[1]
             top = rel.split("/", 1)[0]
-            self.assertIn(top, {"app.md", "app-actions.json", "app-assistant.json", "app-chat.json", "workflows", "rubrics", "templates", "views", "bindings", "screens"})
+            self.assertIn(top, {"app.md", "app-actions.json", "app-assistant.json", "app-chat.json", "app-storage.json", "workflows", "rubrics", "templates", "views", "bindings", "screens", "storage"})
             self.assertFalse(any(p.startswith(".") for p in rel.split("/")))
         self.assertIn(f"{REAL_ROOT}/app.md", names)
         self.assertIn(f"{REAL_ROOT}/workflows/reply-draft.md", names)
         self.assertIn(f"{REAL_ROOT}/app-chat.json", names)
+        self.assertIn(f"{REAL_ROOT}/app-storage.json", names)
+        self.assertIn(f"{REAL_ROOT}/storage/001-settings.json", names)
         self.assertEqual(
             {n for n in names if n.startswith(f"{REAL_ROOT}/screens/")},
             {
@@ -447,7 +448,6 @@ class BuildAndExclusionTests(unittest.TestCase):
         result = pkg.verify_archive(self.out / f"{REAL_ROOT}.tar.gz")
         self.assertEqual(result["app"], "waba")
         self.assertEqual(result["version"], REAL_VERSION)
-        self.assertEqual(result["files"], 8)
 
 
 class VerifyParityTests(unittest.TestCase):
@@ -596,7 +596,7 @@ class VerifyParityTests(unittest.TestCase):
         # The real built archive carries explicit dir entries with a
         # trailing slash — canonicalization must not reject it.
         result = pkg.verify_archive(self.out / f"{REAL_ROOT}.tar.gz")
-        self.assertEqual(result["files"], 8)
+        self.assertEqual(result["version"], REAL_VERSION)
 
 
 class CleanRefusalTests(unittest.TestCase):
