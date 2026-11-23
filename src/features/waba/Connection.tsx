@@ -51,7 +51,7 @@ export default function Connection({ scope, canConnect }: { scope: DisplayScope;
       try { opened = window.open(link.url, "_blank", "noopener,noreferrer"); } catch { opened = null; }
       setSignup({ phase: opened ? "open" : "manual", link });
     } catch (e) {
-      setSignup({ phase: "failed", text: errorText(e, linked ? "Cadence could not open account settings." : "Cadence could not get a signup link.") });
+      setSignup({ phase: "failed", text: errorText(e, linked ? "Cadence could not open WhatsApp Settings." : "Cadence could not get a signup link.") });
     }
   }
 
@@ -69,27 +69,33 @@ export default function Connection({ scope, canConnect }: { scope: DisplayScope;
     {status && !status.connected && !canConnect && <Notice state="read-only">Only the workspace operator can connect a WhatsApp number.</Notice>}
     {canConnect && status && (linked || !status.connected) && <div className="waba-card" data-signup={signup.phase}>
       <h3>{linked ? (zh ? "管理已連結裝置" : "Manage linked device") : (zh ? "連接電話號碼" : "Connect a number")}</h3>
-      <p>{linked ? (zh ? "開啟工作區帳戶設定，再以 WhatsApp 掃描二維碼。" : "Open workspace account settings to pair with a WhatsApp QR code.")
+      <p>{linked ? (zh ? "開啟 Cadence WhatsApp 設定，再以 WhatsApp 掃描二維碼。" : "Open Cadence WhatsApp Settings to pair with a WhatsApp QR code.")
         : (zh ? "請在 FavCRM 使用你的 Meta 帳戶完成設定。" : "Finish setup in FavCRM with your Meta account.")}</p>
-      {signup.phase === "open" && <Notice>{linked ? "Account settings opened in a new tab. After pairing, choose Check status." : <>The signup page opened in a new tab. When you finish or close it, choose <strong>Check status</strong>.</>}</Notice>}
-      {signup.phase === "manual" && <ManualLink link={signup.link} linked={linked} />}
+      {signup.phase === "open" && <Notice>{linked
+        ? (zh ? "已在分頁開啟 Cadence WhatsApp 設定。完成配對後，請選「檢查狀態」。" : <>Cadence WhatsApp Settings opened in a new tab. After pairing, choose <strong>Check status</strong>.</>)
+        : <>The signup page opened in a new tab. When you finish or close it, choose <strong>Check status</strong>.</>}</Notice>}
+      {signup.phase === "manual" && <ManualLink link={signup.link} linked={linked} zh={zh} />}
       {signup.phase === "expired" && <ErrorNotice>The signup link expired before signup finished. Get a new link to try again.</ErrorNotice>}
-      {signup.phase === "incomplete" && <Notice>{linked ? "The linked device is not connected yet. Open account settings to pair it, then check status." : "Signup is not complete yet. If you cancelled or closed the page, get a new link to start again."}</Notice>}
-      {signup.phase === "incomplete" && signup.link && <ManualLink link={signup.link} linked={linked} />}
-      {signup.phase === "failed" && <ErrorNotice>{linked ? "Account settings could not open" : "Signup could not start"}: {signup.text}</ErrorNotice>}
+      {signup.phase === "incomplete" && <Notice>{linked
+        ? (zh ? "已連結裝置尚未連線。請開啟 Cadence WhatsApp 設定完成配對，然後檢查狀態。" : "The linked device is not connected yet. Open Cadence WhatsApp Settings to pair it, then check status.")
+        : "Signup is not complete yet. If you cancelled or closed the page, get a new link to start again."}</Notice>}
+      {signup.phase === "incomplete" && signup.link && <ManualLink link={signup.link} linked={linked} zh={zh} />}
+      {signup.phase === "failed" && <ErrorNotice>{linked ? (zh ? "無法開啟 Cadence WhatsApp 設定" : "Cadence WhatsApp Settings could not open") : "Signup could not start"}: {signup.text}</ErrorNotice>}
       <Button variant="primary" onClick={() => { void connect(); }} loading={signup.phase === "minting"}>
-        {linked ? (zh ? "開啟帳戶設定" : "Open account settings") : signup.phase === "idle" || signup.phase === "minting" ? (zh ? "連接 WhatsApp" : "Connect WhatsApp") : (zh ? "取得新連結" : "Get a new signup link")}
+        {linked ? (zh ? "開啟 Cadence WhatsApp 設定" : "Open Cadence WhatsApp Settings") : signup.phase === "idle" || signup.phase === "minting" ? (zh ? "連接 WhatsApp" : "Connect WhatsApp") : (zh ? "取得新連結" : "Get a new signup link")}
       </Button>
     </div>}
   </section>;
 }
 
-function ManualLink({ link, linked }: { link: ConnectSession; linked: boolean }) {
-  return <div className="waba-manual" role="group" aria-label={linked ? "Account settings link" : "Signup link"}>
-    <p>{linked ? "Your browser blocked the new tab. Copy this account settings link into a new browser tab, pair the device there, then choose Check status." : <>Your browser blocked the signup window. Copy this one-time link into a new browser tab, finish signup there, then choose <strong>Check status</strong>.</>}</p>
-    <label htmlFor="waba-signup-link">{linked ? "Account settings link" : "Signup link"}</label>
+function ManualLink({ link, linked, zh }: { link: ConnectSession; linked: boolean; zh: boolean }) {
+  return <div className="waba-manual" role="group" aria-label={linked ? (zh ? "Cadence WhatsApp 設定連結" : "Cadence WhatsApp Settings link") : "Signup link"}>
+    <p>{linked
+      ? (zh ? <>瀏覽器已封鎖新分頁。請複製此 Cadence WhatsApp 設定連結到新分頁配對裝置，然後選<strong>檢查狀態</strong>。</> : <>Your browser blocked the new tab. Copy this Cadence WhatsApp Settings link into a new browser tab, pair the device there, then choose <strong>Check status</strong>.</>)
+      : <>Your browser blocked the signup window. Copy this one-time link into a new browser tab, finish signup there, then choose <strong>Check status</strong>.</>}</p>
+    <label htmlFor="waba-signup-link">{linked ? (zh ? "Cadence WhatsApp 設定連結" : "Cadence WhatsApp Settings link") : "Signup link"}</label>
     <input id="waba-signup-link" className="field" readOnly value={link.url} onFocus={e => e.currentTarget.select()} />
-    <p className="waba-muted">{linked ? "Account settings require a signed-in workspace owner." : <>Expires {when(link.expiresAt)}. Anyone with this link can start signup, so don&apos;t share it.</>}</p>
+    <p className="waba-muted">{linked ? (zh ? "開啟 Cadence WhatsApp 設定需由工作區擁有人登入。" : "Cadence WhatsApp Settings require a signed-in workspace owner.") : <>Expires {when(link.expiresAt)}. Anyone with this link can start signup, so don&apos;t share it.</>}</p>
   </div>;
 }
 
@@ -115,11 +121,11 @@ function StatusCard({ status, linked, zh }: { status: Status; linked: boolean; z
         <strong>{label}</strong>
       </p>
       {status.state === "stopped" && <Notice state="stopped">{zh
-        ? "已連結裝置工作階段已停止。請在工作區帳戶設定開啟，或執行 cadence connection whatsapp start --provider linked。"
-        : "The linked device session is stopped. Open workspace account settings or run cadence connection whatsapp start --provider linked."}</Notice>}
+        ? "已連結裝置工作階段已停止（$0/月，保留配對裝置）。請在 Cadence WhatsApp 設定啟動，或執行 cadence connection whatsapp start --provider linked。"
+        : "The linked device session is stopped ($0/mo, device stays paired). Start it in Cadence WhatsApp Settings or run cadence connection whatsapp start --provider linked."}</Notice>}
       {status.state === "reauthorization_required" && <Notice state="warning">{zh
-        ? "已連結裝置需要重新掃描二維碼配對，請開啟工作區帳戶設定。"
-        : "The linked device session needs re-pairing with a fresh QR code in workspace account settings."}</Notice>}
+        ? "已連結裝置需要重新掃描二維碼配對，請開啟 Cadence WhatsApp 設定。"
+        : "The linked device session needs re-pairing with a fresh QR code in Cadence WhatsApp Settings."}</Notice>}
     </>;
   }
   const hook = status.webhook;
