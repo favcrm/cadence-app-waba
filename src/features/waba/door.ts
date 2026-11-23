@@ -171,6 +171,51 @@ export function formatMediaDuration(seconds: number | null): string | null {
   const secs = total % 60;
   return `${mins}:${String(secs).padStart(2, "0")}`;
 }
+export function mediaBadge(media: LinkedMediaInfo): string {
+  if (media.kind === "image") return "IMG";
+  if (media.kind === "video") return "VID";
+  if (media.kind === "audio") return media.ptt ? "PTT" : "AUD";
+  const mime = media.mimeType.toLowerCase();
+  if (mime === "application/pdf") return "PDF";
+  if (mime.includes("wordprocessingml")) return "DOCX";
+  if (mime.includes("spreadsheetml")) return "XLSX";
+  if (mime.includes("presentationml")) return "PPTX";
+  if (mime === "text/csv") return "CSV";
+  if (mime === "text/plain") return "TXT";
+  return "FILE";
+}
+export type MediaExtTone = "pdf" | "xlsx" | "docx" | "pptx" | "csv" | "txt" | "audio" | "file";
+export function mediaExtTone(media: LinkedMediaInfo): MediaExtTone {
+  if (media.kind === "audio") return "audio";
+  const badge = mediaBadge(media);
+  if (badge === "PDF") return "pdf";
+  if (badge === "XLSX") return "xlsx";
+  if (badge === "DOCX") return "docx";
+  if (badge === "PPTX") return "pptx";
+  if (badge === "CSV") return "csv";
+  if (badge === "TXT") return "txt";
+  return "file";
+}
+export function mediaKindLabel(media: LinkedMediaInfo, zh: boolean): string {
+  if (media.kind === "image") return zh ? "圖片" : "Image";
+  if (media.kind === "video") return zh ? "影片" : "Video";
+  if (media.kind === "audio") return media.ptt ? (zh ? "語音訊息" : "Voice message") : (zh ? "音訊" : "Audio");
+  return zh ? "文件" : "Document";
+}
+export function mediaMetaSummary(media: LinkedMediaInfo): string {
+  const parts = [
+    formatMediaBytes(media.byteLength),
+    media.width && media.height ? `${media.width}×${media.height}` : null,
+    formatMediaDuration(media.durationSeconds),
+  ].filter((part): part is string => part !== null);
+  return parts.join(" · ");
+}
+export function mediaAspectRatio(media: Pick<LinkedMediaInfo, "kind" | "width" | "height">): number {
+  if (media.width && media.height && media.width > 0 && media.height > 0) {
+    return Math.min(16 / 9, Math.max(0.75, media.width / media.height));
+  }
+  return media.kind === "video" ? 16 / 9 : 4 / 3;
+}
 export function parseMessages(v: unknown): Page<Message> {
   const d = door(v);
   if (!Array.isArray(d.messages)) bad();

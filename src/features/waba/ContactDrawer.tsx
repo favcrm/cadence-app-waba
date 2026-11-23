@@ -1,7 +1,8 @@
 import { Button, Detail, ErrorNotice, Field, Loading, Select, type DrawerEdit } from "@cadence/screen-ui";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { channel } from "../../bridge/channel";
 import type { DisplayScope } from "../../bridge/scope";
-import { when, type Conversation, type Message, type WorkLink } from "./door";
+import { errorText, formatMediaBytes, formatMediaDuration, mediaBadge, mediaExtTone, mediaKindLabel, when, type Conversation, type Message, type WorkLink } from "./door";
 import FrameDrawer from "./FrameDrawer";
 import {
   addThreadNote,
@@ -28,6 +29,7 @@ type Notes = { rows: ThreadNote[]; cursor: string | null };
 export interface ContactDrawerProps {
   scope: DisplayScope;
   conversation: Conversation;
+  conversationId: string;
   workLink: WorkLink | null;
   title: string;
   subtitle: string;
@@ -35,13 +37,14 @@ export interface ContactDrawerProps {
   group: boolean;
   zh: boolean;
   avatar: ReactNode;
-  photos: Message[];
+  mediaMessages: Message[];
   loadedMedia: Map<string, { url: string; mimeType: string; fileName: string | null }>;
   hostMediaDownload: boolean;
   unavailablePreview: string;
   dueDay: string;
   onSaved: (record: ThreadWork) => void;
   onDirty: (dirty: boolean) => void;
+  onLoadInline: (messageId: string, priority?: "user" | "auto") => Promise<{ url: string; mimeType: string; fileName: string | null }>;
   onOpenLightbox: (messageId: string) => void;
   onClose: () => void;
 }
@@ -49,6 +52,7 @@ export interface ContactDrawerProps {
 export default function ContactDrawer({
   scope,
   conversation,
+  conversationId,
   workLink,
   title,
   subtitle,
@@ -56,13 +60,14 @@ export default function ContactDrawer({
   group,
   zh,
   avatar,
-  photos,
+  mediaMessages,
   loadedMedia,
   hostMediaDownload,
   unavailablePreview,
   dueDay,
   onSaved,
   onDirty,
+  onLoadInline,
   onOpenLightbox,
   onClose,
 }: ContactDrawerProps) {
@@ -341,23 +346,111 @@ export default function ContactDrawer({
     {saved && <p className="waba-muted waba-work-save" role="status">{saved}</p>}
   </>;
 
-  const mediaPanel = <section className="waba-drawer-sect" aria-labelledby="waba-contact-media-title">
-    <h4 id="waba-contact-media-title">{zh ? "已分享的媒體" : "Shared media"}</h4>
-    {photos.length ? <ul className="waba-contact-media">{photos.map(m => <li key={m.id}>
-      {m.media?.kind === "image" && m.media.available && hostMediaDownload
-        ? <button type="button" className="waba-media-trigger" aria-label={m.media.fileName ?? (zh ? "檢視相片" : "View photo")} onClick={() => onOpenLightbox(m.id)}>
-            {loadedMedia.get(m.id)
-              ? <img className="waba-photo-preview" src={loadedMedia.get(m.id)!.url} alt={m.media.fileName ?? (zh ? "相片" : "Photo")} loading="lazy" decoding="async" />
-              : m.previewJpeg
-              ? <img className="waba-photo-preview" src={`data:image/jpeg;base64,${m.previewJpeg}`} alt={zh ? "相片預覽" : "Photo preview"} loading="lazy" decoding="async" />
-              : <span className="waba-media-tile"><span className="waba-media-badge">IMG</span><span className="waba-media-info"><span className="waba-media-title">{m.media.fileName ?? (zh ? "相片" : "Photo")}</span></span></span>}
-          </button>
-        : m.previewJpeg
-        ? <img className="waba-photo-preview" src={`data:image/jpeg;base64,${m.previewJpeg}`} alt={zh ? "相片預覽" : "Photo preview"} loading="lazy" decoding="async" />
-        : <p className="waba-muted">{unavailablePreview}</p>}
-    </li>)}</ul>
-      : <p className="waba-muted">{zh ? "已載入的訊息沒有相片預覽。" : "No photo previews in loaded messages."}</p>}
-  </section>;
+  const visualItems = mediaMessages.filter(m => m.previewJpeg !== null || m.media?.kind === "image" || m.media?.kind === "video");
+  const fileItems = mediaMessages.filter(m => m.media?.kind === "document" || m.media?.kind === "audio");
+  const totalMediaCount = mediaMessages.length;
+  const drawerAutoTried = useRef<Set<string>>(new Set());
+  const [savingMediaId, setSavingMediaId] = useState<string | null>(null);
+  const [savedMediaIds, setSavedMediaIds] = useState<Set<string>>(() => new Set());
+  const [mediaSaveError, setMediaSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    drawerAutoTried.current.clear();
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (!hostMediaDownload) return;
+    for (const m of visualItems) {
+      if (m.media?.kind === "image" && m.media.available && !loadedMedia.get(m.id)?.url && !drawerAutoTried.current.has(m.id)) {
+        drawerAutoTried.current.add(m.id);
+        void onLoadInline(m.id, "auto").catch(() => undefined);
+      }
+    }
+  }, [visualItems, hostMediaDownload, loadedMedia, onLoadInline]);
+
+  async function saveDrawerMedia(messageId: string) {
+    if (savingMediaId) return;
+    setSavingMediaId(messageId);
+    setMediaSaveError(null);
+    try {
+      await channel.saveMedia(conversationId, messageId);
+      setSavedMediaIds(curr => new Set(curr).add(messageId));
+    } catch (e) {
+      setMediaSaveError(errorText(e, zh ? "無法下載檔案。" : "Couldn’t save attachment."));
+    } finally {
+      setSavingMediaId(null);
+    }
+  }
+
+  const mediaPanel = totalMediaCount > 0 ? <>
+    {visualItems.length > 0 && <section className="waba-drawer-sect" aria-labelledby="waba-contact-media-title">
+      <h4 id="waba-contact-media-title">{zh ? `相片與影片 (${visualItems.length})` : `Photos & videos (${visualItems.length})`}</h4>
+      <ul className="waba-contact-media-grid">{visualItems.map(m => {
+        const inline = loadedMedia.get(m.id);
+        const inlineImageUrl = m.media?.kind !== "video" && inline?.url && inline.mimeType.toLowerCase().startsWith("image/") ? inline.url : null;
+        const dur = m.media ? formatMediaDuration(m.media.durationSeconds) : null;
+        const canOpen = !!m.media && (m.media.kind === "image" || m.media.kind === "video") && m.media.available && hostMediaDownload;
+        const thumbSrc = inlineImageUrl ?? (m.previewJpeg ? `data:image/jpeg;base64,${m.previewJpeg}` : null);
+        const tileAlt = m.media?.fileName ?? (m.media ? mediaKindLabel(m.media, zh) : (zh ? "相片預覽" : "Photo preview"));
+        const inner = <>
+          {thumbSrc
+            ? <img src={thumbSrc} alt={tileAlt} loading="lazy" decoding="async" />
+            : <span className="waba-contact-tile-fallback">{m.media ? mediaBadge(m.media) : "IMG"}</span>}
+          {m.media?.kind === "video" && <span className="waba-contact-video-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><path d="m8 5.5 11 6.5-11 6.5Z" /></svg>
+            {dur && <span>{dur}</span>}
+          </span>}
+        </>;
+        return <li key={m.id}>
+          {canOpen
+            ? <button type="button" className="waba-contact-tile" aria-label={tileAlt} onClick={() => onOpenLightbox(m.id)}>{inner}</button>
+            : <div className="waba-contact-tile waba-contact-tile-static" aria-label={!thumbSrc ? unavailablePreview : tileAlt}>{inner}</div>}
+        </li>;
+      })}</ul>
+    </section>}
+    {fileItems.length > 0 && <section className="waba-drawer-sect" aria-labelledby="waba-contact-files-title">
+      <h4 id="waba-contact-files-title">{zh ? `檔案與語音 (${fileItems.length})` : `Files & audio (${fileItems.length})`}</h4>
+      {mediaSaveError && <ErrorNotice bare>{mediaSaveError}</ErrorNotice>}
+      <ul className="waba-contact-files">{fileItems.map(m => {
+        const media = m.media!;
+        const label = media.fileName ?? mediaKindLabel(media, zh);
+        const dur = formatMediaDuration(media.durationSeconds);
+        const bytes = formatMediaBytes(media.byteLength);
+        const sub = [dur, bytes, !media.available ? (zh ? "無法提供" : "Unavailable") : null].filter(Boolean).join(" · ");
+        const isSaving = savingMediaId === m.id;
+        const isSaved = savedMediaIds.has(m.id);
+        return <li key={m.id} className="waba-doc-card">
+          <span className="waba-doc-badge" data-ext={mediaExtTone(media)}>{mediaBadge(media)}</span>
+          <span className="waba-doc-meta">
+            <span className="waba-doc-name" title={label}>{label}</span>
+            {sub && <span className="waba-doc-sub">{sub}</span>}
+          </span>
+          {media.available && hostMediaDownload && (
+            <button
+              type="button"
+              className="waba-media-icon-btn"
+              data-saved={isSaved ? "true" : undefined}
+              disabled={savingMediaId !== null}
+              aria-busy={isSaving || undefined}
+              aria-label={isSaved ? (zh ? "已下載" : "Saved") : (zh ? `下載 ${label}` : `Save ${label}`)}
+              title={isSaved ? (zh ? "已下載" : "Saved") : (zh ? "下載" : "Save")}
+              onClick={() => { void saveDrawerMedia(m.id); }}
+            >
+              {isSaving
+                ? <span className="waba-inline-spin" aria-hidden="true" />
+                : isSaved
+                ? <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m5 12.5 4.2 4.2L19 7" /></svg>
+                : <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5M5 19h14" /></svg>}
+            </button>
+          )}
+        </li>;
+      })}</ul>
+    </section>}
+  </>
+    : <section className="waba-drawer-sect" aria-labelledby="waba-contact-media-title">
+        <h4 id="waba-contact-media-title">{zh ? "已分享的媒體" : "Shared media"}</h4>
+        <p className="waba-muted">{zh ? "已載入的訊息沒有分享的媒體或檔案。" : "No shared media or files in loaded messages."}</p>
+      </section>;
 
   const drawerEdit: DrawerEdit | null = editing && workLink ? {
     formId: "waba-contact-work-form",
@@ -403,7 +496,7 @@ export default function ContactDrawer({
     pills={pills}
     tabs={[
       { id: "overview", label: zh ? "概覽" : "Overview", panel: overviewPanel },
-      { id: "media", label: photos.length > 0 ? (zh ? `媒體 (${photos.length})` : `Media (${photos.length})`) : (zh ? "媒體" : "Media"), panel: mediaPanel },
+      { id: "media", label: totalMediaCount > 0 ? (zh ? `媒體 (${totalMediaCount})` : `Media (${totalMediaCount})`) : (zh ? "媒體" : "Media"), panel: mediaPanel },
     ]}
     edit={drawerEdit}
     note={workLink ? (zh ? "主要由助理更新" : "Updated by your assistant") : (zh ? "唯讀檢視" : "Read-only view")}
