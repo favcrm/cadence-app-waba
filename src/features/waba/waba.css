@@ -145,7 +145,7 @@ html[data-cadence-kit] body {
 .waba-message-meta { display: flex; gap: 0.375rem; justify-content: end; font-size: var(--text-micro); }
 .waba-photo-preview { display: block; inline-size: min(14rem, 100%); aspect-ratio: 4 / 3; object-fit: cover; border-radius: 0.5rem; }
 .waba-message:has(.waba-photo-preview), .waba-message:has(.waba-media-card) { inline-size: min(19.5rem, 88%); }
-.waba-message:has(.waba-media-frame) { inline-size: min(20rem, 86%); padding: 0.25rem 0.25rem 0.45rem; }
+.waba-message:has(.waba-media-frame) { inline-size: min(18rem, 84%); padding: 0.25rem 0.25rem 0.45rem; }
 .waba-message:has(.waba-media-frame) > .waba-media-card > .waba-media-caption,
 .waba-message:has(.waba-media-frame) > .waba-message-meta { padding-inline: 0.5rem; }
 .waba-message:has(.waba-voice-card, .waba-doc-card) { inline-size: min(21rem, 88%); padding: 0.375rem; }
@@ -153,7 +153,7 @@ html[data-cadence-kit] body {
 .waba-message .waba-photo-preview { inline-size: 100%; }
 .waba-media-card { display: grid; gap: 0.375rem; min-width: 0; }
 .waba-media-frame-wrap { position: relative; min-width: 0; }
-.waba-media-frame { position: relative; display: block; width: 100%; max-height: 18rem; padding: 0; border: 0; border-radius: 0.625rem; overflow: hidden; background: var(--color-ink-850); cursor: pointer; text-align: start; }
+.waba-media-frame { position: relative; display: block; width: 100%; max-height: 23rem; padding: 0; border: 0; border-radius: 0.625rem; overflow: hidden; background: var(--color-ink-850); cursor: pointer; text-align: start; }
 .waba-media-frame:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .waba-media-img { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 0.625rem; transition: filter 0.3s ease, transform 0.22s ease; }
 .waba-media-blur { filter: blur(10px) scale(1.04); }

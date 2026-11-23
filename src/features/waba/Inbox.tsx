@@ -1031,6 +1031,7 @@ function Thread({ scope, id, initial, preview, inboxScope, work, onWork, canRepl
       media={lightboxMessage.media}
       items={visualMedia}
       loaded={loadedMedia.get(lightboxMessage.id) ?? null}
+      loadedMedia={loadedMedia}
       zh={zh}
       unavailable={unavailablePreview}
       closeRef={closeLightboxButton}
@@ -1394,6 +1395,7 @@ function MediaLightbox({
   media,
   items,
   loaded,
+  loadedMedia,
   zh,
   unavailable,
   closeRef,
@@ -1406,6 +1408,7 @@ function MediaLightbox({
   media: LinkedMediaInfo;
   items: Message[];
   loaded: { url: string; mimeType: string; fileName: string | null } | null;
+  loadedMedia: Map<string, { url: string; mimeType: string; fileName: string | null }>;
   zh: boolean;
   unavailable: string;
   closeRef: RefObject<HTMLButtonElement | null>;
@@ -1578,23 +1581,28 @@ function MediaLightbox({
       {savedName && <p className="waba-muted" role="status">{zh ? `已儲存 ${savedName}` : `Saved ${savedName}`}</p>}
       {saveError && <ErrorNotice bare>{saveError}</ErrorNotice>}
       {items.length > 1 && <div className="waba-lightbox-thumbs">
-        {items.map(item => (
-          <button
-            key={item.id}
-            type="button"
-            className="waba-lightbox-thumb"
-            aria-current={item.id === message.id ? "true" : undefined}
-            aria-label={item.media?.fileName ?? (item.media ? mediaKindLabel(item.media, zh) : (zh ? "媒體" : "Media"))}
-            onClick={() => onSelect(item.id)}
-          >
-            {item.previewJpeg
-              ? <img src={`data:image/jpeg;base64,${item.previewJpeg}`} alt="" loading="lazy" decoding="async" />
-              : <span className="waba-lightbox-thumb-fallback">{item.media ? mediaBadge(item.media) : "IMG"}</span>}
-            {item.media?.kind === "video" && <span className="waba-lightbox-thumb-play" aria-hidden="true">
-              <svg viewBox="0 0 24 24" width="8" height="8" fill="currentColor"><path d="m8 5.5 11 6.5-11 6.5Z" /></svg>
-            </span>}
-          </button>
-        ))}
+        {items.map(item => {
+          const itemLoaded = loadedMedia.get(item.id);
+          const itemThumbSrc = (item.media?.kind !== "video" && itemLoaded?.url && itemLoaded.mimeType.toLowerCase().startsWith("image/") ? itemLoaded.url : null)
+            ?? (item.previewJpeg ? `data:image/jpeg;base64,${item.previewJpeg}` : null);
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className="waba-lightbox-thumb"
+              aria-current={item.id === message.id ? "true" : undefined}
+              aria-label={item.media?.fileName ?? (item.media ? mediaKindLabel(item.media, zh) : (zh ? "媒體" : "Media"))}
+              onClick={() => onSelect(item.id)}
+            >
+              {itemThumbSrc
+                ? <img src={itemThumbSrc} alt="" loading="lazy" decoding="async" />
+                : <span className="waba-lightbox-thumb-fallback">{item.media ? mediaBadge(item.media) : "IMG"}</span>}
+              {item.media?.kind === "video" && <span className="waba-lightbox-thumb-play" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="8" height="8" fill="currentColor"><path d="m8 5.5 11 6.5-11 6.5Z" /></svg>
+              </span>}
+            </button>
+          );
+        })}
       </div>}
     </footer>
   </div>;

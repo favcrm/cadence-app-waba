@@ -387,9 +387,10 @@ export default function ContactDrawer({
       <h4 id="waba-contact-media-title">{zh ? `相片與影片 (${visualItems.length})` : `Photos & videos (${visualItems.length})`}</h4>
       <ul className="waba-contact-media-grid">{visualItems.map(m => {
         const inline = loadedMedia.get(m.id);
+        const inlineImageUrl = m.media?.kind !== "video" && inline?.url && inline.mimeType.toLowerCase().startsWith("image/") ? inline.url : null;
         const dur = m.media ? formatMediaDuration(m.media.durationSeconds) : null;
         const canOpen = !!m.media && (m.media.kind === "image" || m.media.kind === "video") && m.media.available && hostMediaDownload;
-        const thumbSrc = inline?.url ?? (m.previewJpeg ? `data:image/jpeg;base64,${m.previewJpeg}` : null);
+        const thumbSrc = inlineImageUrl ?? (m.previewJpeg ? `data:image/jpeg;base64,${m.previewJpeg}` : null);
         const tileAlt = m.media?.fileName ?? (m.media ? mediaKindLabel(m.media, zh) : (zh ? "相片預覽" : "Photo preview"));
         const inner = <>
           {thumbSrc
