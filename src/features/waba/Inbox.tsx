@@ -967,7 +967,7 @@ function Thread({ scope, id, initial, preview, inboxScope, work, onWork, canRepl
                             ? <PhotoPreview key={m.previewJpeg} jpeg={m.previewJpeg} label={zh ? "相片預覽" : "Photo preview"} unavailable={unavailablePreview} />
                             : <p className="waba-muted">{unavailablePreview}</p>
                         : <p>{m.body ?? (m.type ? `[${m.type}]` : "")}</p>}
-                      {(at !== null || m.status) && <div className="waba-message-meta waba-muted">{at !== null && <time dateTime={m.createdAt!}>{time.format(at)}</time>}{m.status && <span>{m.status}</span>}</div>}
+                      {(at !== null || (m.direction === "outbound" && !!m.status)) && <div className="waba-message-meta waba-muted">{at !== null && <time dateTime={m.createdAt!}>{time.format(at)}</time>}{m.direction === "outbound" && m.status ? <MessageStatusTick status={m.status} zh={zh} /> : null}</div>}
                     </li>
                   </Fragment>;
                 })}</ol>}
@@ -1046,6 +1046,48 @@ function PhotoPreview({ jpeg, label, unavailable, className }: { jpeg: string; l
   const [failed, setFailed] = useState(false);
   return failed ? <p className="waba-muted">{unavailable}</p>
     : <img className={className ?? "waba-photo-preview"} src={`data:image/jpeg;base64,${jpeg}`} alt={label} loading="lazy" decoding="async" onError={() => setFailed(true)} />;
+}
+
+function MessageStatusTick({ status, zh }: { status: string; zh: boolean }) {
+  const normalized = status.trim().toLowerCase();
+  if (normalized === "pending" || normalized === "queued" || normalized === "sending" || normalized === "dispatching") {
+    const label = zh ? "傳送中" : "Sending";
+    return <span className="waba-tick" data-state="pending" role="img" aria-label={label} title={label}>
+      <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <circle cx="8" cy="8" r="5.5" />
+        <path d="M8 5v3l2 1.2" />
+      </svg>
+    </span>;
+  }
+  if (normalized === "sent" || normalized === "accepted") {
+    const label = zh ? "已傳送" : "Sent";
+    return <span className="waba-tick" data-state="sent" role="img" aria-label={label} title={label}>
+      <svg viewBox="0 0 16 11" width="14" height="10" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M3.5 6.2 6.5 9.2 13 2.3" />
+      </svg>
+    </span>;
+  }
+  if (normalized === "delivered" || normalized === "read" || normalized === "played") {
+    const read = normalized === "read" || normalized === "played";
+    const label = read ? (zh ? "已讀" : "Read") : (zh ? "已送達" : "Delivered");
+    return <span className="waba-tick" data-state={read ? "read" : "delivered"} role="img" aria-label={label} title={label}>
+      <svg viewBox="0 0 18 11" width="16" height="10" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M1.8 6.2 4.6 9.1 10.8 2.3" />
+        <path d="M6.6 6.2 9.4 9.1 15.6 2.3" />
+      </svg>
+    </span>;
+  }
+  if (normalized === "failed") {
+    const label = zh ? "傳送失敗" : "Failed";
+    return <span className="waba-tick" data-state="failed" role="img" aria-label={label} title={label}>
+      <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <circle cx="8" cy="8" r="5.5" />
+        <path d="M8 5v3.5" />
+        <circle cx="8" cy="11" r="0.6" fill="currentColor" stroke="none" />
+      </svg>
+    </span>;
+  }
+  return null;
 }
 
 function voiceWaveformHeights(seed: string): number[] {
