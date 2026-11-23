@@ -9,7 +9,7 @@ import { dueLabel,effectiveThreadState,listThreadWork,validWorkRef,type ThreadSt
 import { useWorkBrowse } from "./useWorkBrowse";
 import { useLivePoll } from "./useLivePoll";
 import type { Recipient } from "./Templates";
-import { declinedReason,errorText,formatMediaBytes,formatMediaDuration,parseConversation,parseConversations,parseDraft,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Draft,type LinkedMediaInfo,type Message,type ReplyState,type ReplyStatus } from "./door";
+import { declinedReason,errorText,formatMediaBytes,formatMediaDuration,mediaAspectRatio,mediaBadge,mediaExtTone,mediaKindLabel,mediaMetaSummary,parseConversation,parseConversations,parseDraft,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Draft,type LinkedMediaInfo,type Message,type ReplyState,type ReplyStatus } from "./door";
 
 const PAGE = 25;
 /** What the copilot may show, derived from the host-granted actions (members get the draft read-only). */
@@ -561,10 +561,18 @@ function Thread({ scope, id, initial, preview, inboxScope, work, onWork, canRepl
   const wasDetailsOpen = useRef(false);
   const closeLightboxButton = useRef<HTMLButtonElement>(null);
   type LoadedInlineMedia = { url: string; mimeType: string; fileName: string | null };
+  type QueuedAutoMedia = {
+    messageId: string;
+    resolve: (value: LoadedInlineMedia) => void;
+    reject: (error: unknown) => void;
+  };
   const mediaMounted = useRef(true);
   const mediaUrls = useRef<Map<string, string>>(new Map());
   const loadedMediaRef = useRef<Map<string, LoadedInlineMedia>>(new Map());
   const inlineInFlight = useRef<Map<string, Promise<LoadedInlineMedia>>>(new Map());
+  const autoQueue = useRef<QueuedAutoMedia[]>([]);
+  const autoQueuedPromises = useRef<Map<string, { task: QueuedAutoMedia; promise: Promise<LoadedInlineMedia> }>>(new Map());
+  const autoRunning = useRef(0);
   const [loadedMedia, setLoadedMedia] = useState<Map<string, LoadedInlineMedia>>(() => new Map());
   const [lightboxId, setLightboxId] = useState<string | null>(null);
   const hostMediaDownload = useSyncExternalStore(channel.subscribeReplyAvailability, () => channel.hostMediaDownload);
@@ -572,16 +580,18 @@ function Thread({ scope, id, initial, preview, inboxScope, work, onWork, canRepl
     mediaMounted.current = true;
     const urls = mediaUrls.current;
     const loaded = loadedMediaRef.current;
+    const queued = autoQueue.current;
+    const queuedMap = autoQueuedPromises.current;
     return () => {
       mediaMounted.current = false;
+      queued.length = 0;
+      queuedMap.clear();
       for (const url of urls.values()) URL.revokeObjectURL(url);
       urls.clear();
       loaded.clear();
     };
   }, []);
-  const loadInlineMedia = useCallback(async (messageId: string): Promise<LoadedInlineMedia> => {
-    const cached = loadedMediaRef.current.get(messageId);
-    if (cached && cached.url) return cached;
+  const runInlineFetch = useCallback((messageId: string): Promise<LoadedInlineMedia> => {
     const active = inlineInFlight.current.get(messageId);
     if (active) return active;
     const promise = channel.downloadMedia(id, messageId).then(downloaded => {
@@ -602,6 +612,54 @@ function Thread({ scope, id, initial, preview, inboxScope, work, onWork, canRepl
     inlineInFlight.current.set(messageId, promise);
     return promise;
   }, [id]);
+  const drainAutoQueue = useCallback(() => {
+    while (mediaMounted.current && autoRunning.current < 1 && autoQueue.current.length > 0) {
+      const task = autoQueue.current.pop()!;
+      autoQueuedPromises.current.delete(task.messageId);
+      const cached = loadedMediaRef.current.get(task.messageId);
+      if (cached && cached.url) {
+        task.resolve(cached);
+        continue;
+      }
+      autoRunning.current += 1;
+      void runInlineFetch(task.messageId)
+        .then(task.resolve, task.reject)
+        .finally(() => {
+          autoRunning.current = Math.max(0, autoRunning.current - 1);
+          drainAutoQueue();
+        });
+    }
+  }, [runInlineFetch]);
+  const loadInlineMedia = useCallback((messageId: string, priority: "user" | "auto" = "user"): Promise<LoadedInlineMedia> => {
+    const cached = loadedMediaRef.current.get(messageId);
+    if (cached && cached.url) return Promise.resolve(cached);
+    const active = inlineInFlight.current.get(messageId);
+    if (active) return active;
+    const queued = autoQueuedPromises.current.get(messageId);
+    if (priority === "user") {
+      if (queued) {
+        autoQueuedPromises.current.delete(messageId);
+        const idx = autoQueue.current.indexOf(queued.task);
+        if (idx >= 0) autoQueue.current.splice(idx, 1);
+        const direct = runInlineFetch(messageId);
+        direct.then(queued.task.resolve, queued.task.reject);
+        return direct;
+      }
+      return runInlineFetch(messageId);
+    }
+    if (queued) return queued.promise;
+    let resolve!: (value: LoadedInlineMedia) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<LoadedInlineMedia>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    const task: QueuedAutoMedia = { messageId, resolve, reject };
+    autoQueuedPromises.current.set(messageId, { task, promise });
+    autoQueue.current.push(task);
+    drainAutoQueue();
+    return promise;
+  }, [runInlineFetch, drainAutoQueue]);
   useLayoutEffect(() => {
     if (lightboxId !== null) closeLightboxButton.current?.focus({ preventScroll: true });
   }, [lightboxId]);
@@ -821,7 +879,10 @@ function Thread({ scope, id, initial, preview, inboxScope, work, onWork, canRepl
   const subtitle = group ? (zh ? "WhatsApp 群組" : "WhatsApp group") : phone ?? phoneUnavailable(zh);
   const detailsLabel = zh ? (group ? "群組詳情" : "聯絡人詳情") : (group ? "Group details" : "Contact details");
   const identity = phone && phone !== title ? `${title}${zh ? "、" : ", "}${phone}` : title;
-  const photos = details ? ordered.filter(m => m.previewJpeg !== null || (m.media?.kind === "image" && m.media.available)) : [];
+  const mediaMessages = details ? ordered.filter(m => m.media !== null || m.previewJpeg !== null) : [];
+  const visualMedia = hostMediaDownload
+    ? ordered.filter(m => m.media?.available && (m.media.kind === "image" || m.media.kind === "video"))
+    : [];
   const lightboxMessage = lightboxId ? ordered.find(m => m.id === lightboxId) ?? null : null;
   const locale = zh ? "zh" : "en";
   const day = dayFormat[locale], time = timeFormat[locale];
@@ -945,6 +1006,7 @@ function Thread({ scope, id, initial, preview, inboxScope, work, onWork, canRepl
       key={workLink?.ref ?? id}
       scope={scope}
       conversation={c}
+      conversationId={id}
       workLink={workLink}
       title={title}
       subtitle={subtitle}
@@ -952,13 +1014,14 @@ function Thread({ scope, id, initial, preview, inboxScope, work, onWork, canRepl
       group={group}
       zh={zh}
       avatar={<Avatar name={title} phone={phone} group={group} />}
-      photos={photos}
+      mediaMessages={mediaMessages}
       loadedMedia={loadedMedia}
       hostMediaDownload={hostMediaDownload}
       unavailablePreview={unavailablePreview}
       dueDay={dueDay}
       onSaved={onWork}
       onDirty={onWorkDirty}
+      onLoadInline={loadInlineMedia}
       onOpenLightbox={messageId => setLightboxId(messageId)}
       onClose={closeDetails}
     />}
@@ -966,50 +1029,31 @@ function Thread({ scope, id, initial, preview, inboxScope, work, onWork, canRepl
       conversationId={id}
       message={lightboxMessage}
       media={lightboxMessage.media}
+      items={visualMedia}
       loaded={loadedMedia.get(lightboxMessage.id) ?? null}
       zh={zh}
       unavailable={unavailablePreview}
       closeRef={closeLightboxButton}
       onLoadInline={loadInlineMedia}
+      onSelect={messageId => setLightboxId(messageId)}
       onClose={() => setLightboxId(null)}
     />}
   </article>;
 }
 
-function PhotoPreview({ jpeg, label, unavailable }: { jpeg: string; label: string; unavailable: string }) {
+function PhotoPreview({ jpeg, label, unavailable, className }: { jpeg: string; label: string; unavailable: string; className?: string }) {
   const [failed, setFailed] = useState(false);
   return failed ? <p className="waba-muted">{unavailable}</p>
-    : <img className="waba-photo-preview" src={`data:image/jpeg;base64,${jpeg}`} alt={label} loading="lazy" decoding="async" onError={() => setFailed(true)} />;
+    : <img className={className ?? "waba-photo-preview"} src={`data:image/jpeg;base64,${jpeg}`} alt={label} loading="lazy" decoding="async" onError={() => setFailed(true)} />;
 }
 
-function mediaBadge(media: LinkedMediaInfo): string {
-  if (media.kind === "image") return "IMG";
-  if (media.kind === "video") return "VID";
-  if (media.kind === "audio") return media.ptt ? "PTT" : "AUD";
-  const mime = media.mimeType.toLowerCase();
-  if (mime === "application/pdf") return "PDF";
-  if (mime.includes("wordprocessingml")) return "DOCX";
-  if (mime.includes("spreadsheetml")) return "XLSX";
-  if (mime.includes("presentationml")) return "PPTX";
-  if (mime === "text/csv") return "CSV";
-  if (mime === "text/plain") return "TXT";
-  return "FILE";
-}
-
-function mediaKindLabel(media: LinkedMediaInfo, zh: boolean): string {
-  if (media.kind === "image") return zh ? "圖片" : "Image";
-  if (media.kind === "video") return zh ? "影片" : "Video";
-  if (media.kind === "audio") return media.ptt ? (zh ? "語音訊息" : "Voice message") : (zh ? "音訊" : "Audio");
-  return zh ? "文件" : "Document";
-}
-
-function mediaMetaSummary(media: LinkedMediaInfo): string {
-  const parts = [
-    formatMediaBytes(media.byteLength),
-    media.width && media.height ? `${media.width}×${media.height}` : null,
-    formatMediaDuration(media.durationSeconds),
-  ].filter((part): part is string => part !== null);
-  return parts.join(" · ");
+function voiceWaveformHeights(seed: string): number[] {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 16777619);
+  return Array.from({ length: 24 }, (_, idx) => {
+    h = Math.imul(h ^ (idx + 17), 16777619);
+    return 24 + (Math.abs(h) % 72);
+  });
 }
 
 function unavailableReasonText(reason: LinkedMediaInfo["unavailableReason"], zh: boolean): string {
@@ -1036,15 +1080,29 @@ function LinkedMediaMessage({
   canDownload: boolean;
   zh: boolean;
   unavailable: string;
-  onLoadInline: (messageId: string) => Promise<{ url: string; mimeType: string; fileName: string | null }>;
+  onLoadInline: (messageId: string, priority?: "user" | "auto") => Promise<{ url: string; mimeType: string; fileName: string | null }>;
   onOpenLightbox: () => void;
 }) {
   const [loadingInline, setLoadingInline] = useState(false);
+  const [autoFailed, setAutoFailed] = useState(false);
   const [inlineError, setInlineError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedName, setSavedName] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const autoTriedRef = useRef<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const pendingAudioPlay = useRef(false);
+  const [audioPlaying, setAudioPlaying] = useState(false);
+  const [audioTime, setAudioTime] = useState(0);
+  const [audioDuration, setAudioDuration] = useState(media.durationSeconds ?? 0);
+
+  useEffect(() => {
+    setAutoFailed(false);
+  }, [message.id]);
+
+  useEffect(() => {
+    setAudioDuration(media.durationSeconds ?? 0);
+  }, [media.durationSeconds]);
 
   useEffect(() => {
     if (
@@ -1052,13 +1110,12 @@ function LinkedMediaMessage({
       !media.available ||
       !canDownload ||
       loaded?.url ||
-      message.previewJpeg ||
       autoTriedRef.current === message.id
     )
       return;
     autoTriedRef.current = message.id;
-    void onLoadInline(message.id).catch(() => {
-      // Clicking the card opens the lightbox with an explicit retry action.
+    void onLoadInline(message.id, "auto").catch(() => {
+      setAutoFailed(true);
     });
   }, [
     canDownload,
@@ -1066,21 +1123,34 @@ function LinkedMediaMessage({
     media.available,
     media.kind,
     message.id,
-    message.previewJpeg,
     onLoadInline,
   ]);
+
+  useEffect(() => {
+    if (loaded?.url && pendingAudioPlay.current && audioRef.current) {
+      pendingAudioPlay.current = false;
+      void audioRef.current.play().catch(() => undefined);
+    }
+  }, [loaded?.url]);
 
   const label = media.fileName ?? mediaKindLabel(media, zh);
   const summary = mediaMetaSummary(media);
 
-  async function playInline() {
+  async function toggleAudio() {
+    if (loaded?.url && audioRef.current) {
+      if (audioRef.current.paused) void audioRef.current.play().catch(() => undefined);
+      else audioRef.current.pause();
+      return;
+    }
     if (loadingInline) return;
+    pendingAudioPlay.current = true;
     setLoadingInline(true);
     setInlineError(null);
     try {
-      await onLoadInline(message.id);
+      await onLoadInline(message.id, "user");
     } catch (e) {
-      setInlineError(errorText(e, zh ? "無法載入媒體。" : "Couldn’t load media."));
+      pendingAudioPlay.current = false;
+      setInlineError(errorText(e, zh ? "無法載入音訊。" : "Couldn’t load audio."));
     } finally {
       setLoadingInline(false);
     }
@@ -1101,6 +1171,11 @@ function LinkedMediaMessage({
   }
 
   const caption = media.caption ? <p className="waba-media-caption">{media.caption}</p> : null;
+  const saveIcon = saving
+    ? <span className="waba-inline-spin" aria-hidden="true" />
+    : savedName
+    ? <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m5 12.5 4.2 4.2L19 7" /></svg>
+    : <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5M5 19h14" /></svg>;
 
   if (!media.available) {
     return <div className="waba-media-card">
@@ -1134,42 +1209,116 @@ function LinkedMediaMessage({
   }
 
   if (media.kind === "image") {
+    const ratio = mediaAspectRatio(media);
     return <div className="waba-media-card">
-      <button type="button" className="waba-media-trigger" aria-label={media.fileName ? `${zh ? "檢視圖片" : "View image"}: ${media.fileName}` : (zh ? "檢視完整圖片" : "View full image")} onClick={onOpenLightbox}>
-        {loaded?.url
-          ? <img className="waba-photo-preview" src={loaded.url} alt={label} loading="lazy" decoding="async" />
-          : message.previewJpeg
-          ? <PhotoPreview key={message.previewJpeg} jpeg={message.previewJpeg} label={label} unavailable={unavailable} />
-          : <span className="waba-media-tile">
-              <span className="waba-media-badge">IMG</span>
-              <span className="waba-media-info">
-                <span className="waba-media-title">{label}</span>
-                {summary && <span className="waba-media-sub">{summary}</span>}
-              </span>
-            </span>}
-      </button>
-      {summary && !message.previewJpeg && !loaded?.url ? null : summary && <span className="waba-media-sub">{summary}</span>}
+      <div className="waba-media-frame-wrap">
+        <button type="button" className="waba-media-frame" style={{ aspectRatio: String(ratio) }} aria-label={media.fileName ? `${zh ? "檢視圖片" : "View image"}: ${media.fileName}` : (zh ? "檢視完整圖片" : "View full image")} onClick={onOpenLightbox}>
+          {loaded?.url
+            ? <img className="waba-media-img" src={loaded.url} alt={label} loading="lazy" decoding="async" />
+            : message.previewJpeg
+            ? <PhotoPreview className="waba-media-img waba-media-blur" key={message.previewJpeg} jpeg={message.previewJpeg} label={label} unavailable={unavailable} />
+            : !autoFailed
+            ? <span className="waba-media-shimmer" aria-hidden="true" />
+            : <span className="waba-media-tile">
+                <span className="waba-media-badge">IMG</span>
+                <span className="waba-media-info">
+                  <span className="waba-media-title">{label}</span>
+                  {summary && <span className="waba-media-sub">{summary}</span>}
+                </span>
+              </span>}
+          <span className="waba-media-hover-badge" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 4h5v5M9 20H4v-5M20 4l-6 6M4 20l6-6" /></svg>
+          </span>
+        </button>
+      </div>
       {caption}
     </div>;
   }
 
   if (media.kind === "audio") {
+    const bars = voiceWaveformHeights(message.id);
+    const totalDur = audioDuration > 0 ? audioDuration : (media.durationSeconds ?? 0);
+    const ratio = totalDur > 0 ? Math.max(0, Math.min(1, audioTime / totalDur)) : 0;
+    const totalLabel = formatMediaDuration(totalDur);
+    const elapsedLabel = formatMediaDuration(audioTime);
+    const timeText = (audioPlaying || audioTime > 0) && totalLabel
+      ? `${elapsedLabel ?? "0:00"} / ${totalLabel}`
+      : totalLabel ?? mediaKindLabel(media, zh);
+    const byteText = formatMediaBytes(media.byteLength);
     return <div className="waba-media-card">
-      <div className="waba-media-tile">
-        <span className="waba-media-badge">{mediaBadge(media)}</span>
-        <span className="waba-media-info">
-          <span className="waba-media-title">{mediaKindLabel(media, zh)}</span>
-          {summary && <span className="waba-media-sub">{summary}</span>}
-        </span>
+      {loaded?.url && <audio
+        ref={audioRef}
+        className="waba-media-audio-hidden"
+        preload="metadata"
+        src={loaded.url}
+        onLoadedMetadata={e => {
+          const d = e.currentTarget.duration;
+          if (Number.isFinite(d) && d > 0) setAudioDuration(d);
+        }}
+        onTimeUpdate={e => setAudioTime(e.currentTarget.currentTime)}
+        onPlay={() => setAudioPlaying(true)}
+        onPause={() => setAudioPlaying(false)}
+        onEnded={() => {
+          setAudioPlaying(false);
+          setAudioTime(0);
+        }}
+      />}
+      <div className="waba-voice-card">
+        <button
+          type="button"
+          className="waba-voice-play-btn"
+          aria-label={audioPlaying ? (zh ? "暫停音訊" : "Pause audio") : (zh ? "播放音訊" : "Play audio")}
+          disabled={loadingInline}
+          aria-busy={loadingInline || undefined}
+          onClick={() => { void toggleAudio(); }}
+        >
+          {loadingInline
+            ? <span className="waba-inline-spin" aria-hidden="true" />
+            : audioPlaying
+            ? <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><rect x="7" y="5.5" width="3.5" height="13" rx="1" /><rect x="13.5" y="5.5" width="3.5" height="13" rx="1" /></svg>
+            : <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="m8 5.5 11 6.5-11 6.5Z" /></svg>}
+        </button>
+        <div className="waba-voice-col">
+          <div
+            className="waba-voice-bars"
+            data-ready={loaded?.url ? "true" : "false"}
+            aria-hidden="true"
+            onClick={e => {
+              if (!audioRef.current || !loaded?.url || totalDur <= 0) return;
+              const rect = e.currentTarget.getBoundingClientRect();
+              if (rect.width <= 0) return;
+              const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+              audioRef.current.currentTime = frac * totalDur;
+              setAudioTime(frac * totalDur);
+            }}
+          >
+            {bars.map((h, i) => (
+              <span
+                key={i}
+                className="waba-voice-bar"
+                data-played={(i / bars.length) < ratio ? "true" : undefined}
+                style={{ height: `${h}%` }}
+              />
+            ))}
+          </div>
+          <div className="waba-voice-foot">
+            <span>{timeText}</span>
+            {byteText && <span>{byteText}</span>}
+          </div>
+        </div>
+        <button
+          type="button"
+          className="waba-media-icon-btn"
+          data-saved={savedName ? "true" : undefined}
+          aria-label={savedName ? (zh ? `已儲存 ${savedName}` : `Saved ${savedName}`) : (zh ? "下載音訊" : "Save audio")}
+          title={savedName ? (zh ? `已儲存 ${savedName}` : `Saved ${savedName}`) : (zh ? "下載" : "Save")}
+          disabled={saving}
+          aria-busy={saving || undefined}
+          onClick={() => { void saveFile(); }}
+        >
+          {saveIcon}
+        </button>
       </div>
-      {loaded?.url
-        ? <audio className="waba-media-audio" controls autoPlay src={loaded.url} />
-        : null}
-      <div className="waba-media-actions">
-        {!loaded?.url && <Button size="sm" loading={loadingInline} onClick={() => { void playInline(); }}>{inlineError ? (zh ? "重試" : "Retry") : (zh ? "播放" : "Play")}</Button>}
-        <Button size="sm" variant="ghost" loading={saving} onClick={() => { void saveFile(); }}>{zh ? "下載" : "Save"}</Button>
-      </div>
-      {savedName && <p className="waba-muted" role="status">{zh ? `已儲存 ${savedName}` : `Saved ${savedName}`}</p>}
       {inlineError && <ErrorNotice bare>{inlineError}</ErrorNotice>}
       {saveError && <ErrorNotice bare>{saveError}</ErrorNotice>}
       {caption}
@@ -1177,43 +1326,63 @@ function LinkedMediaMessage({
   }
 
   if (media.kind === "video") {
-    const poster = message.previewJpeg ? `data:image/jpeg;base64,${message.previewJpeg}` : undefined;
+    const ratio = mediaAspectRatio(media);
+    const dur = formatMediaDuration(media.durationSeconds);
     return <div className="waba-media-card">
-      {loaded?.url
-        ? <video className="waba-media-video" controls playsInline autoPlay poster={poster} src={loaded.url} />
-        : message.previewJpeg
-        ? <PhotoPreview key={message.previewJpeg} jpeg={message.previewJpeg} label={label} unavailable={unavailable} />
-        : <div className="waba-media-tile">
-            <span className="waba-media-badge">VID</span>
-            <span className="waba-media-info">
-              <span className="waba-media-title">{mediaKindLabel(media, zh)}</span>
-              {summary && <span className="waba-media-sub">{summary}</span>}
-            </span>
-          </div>}
-      <div className="waba-media-actions">
-        {!loaded?.url && <Button size="sm" loading={loadingInline} onClick={() => { void playInline(); }}>{inlineError ? (zh ? "重試" : "Retry") : (zh ? "播放影片" : "Play video")}</Button>}
-        <Button size="sm" variant="ghost" loading={saving} onClick={() => { void saveFile(); }}>{zh ? "下載" : "Save"}</Button>
-        {summary && !loaded?.url && message.previewJpeg && <span className="waba-media-sub">{summary}</span>}
+      <div className="waba-media-frame-wrap">
+        <button type="button" className="waba-media-frame" style={{ aspectRatio: String(ratio) }} aria-label={media.fileName ? `${zh ? "播放影片" : "Play video"}: ${media.fileName}` : (zh ? "播放影片" : "Play video")} onClick={onOpenLightbox}>
+          {message.previewJpeg
+            ? <PhotoPreview className="waba-media-img" key={message.previewJpeg} jpeg={message.previewJpeg} label={label} unavailable={unavailable} />
+            : <span className="waba-video-poster-fallback" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="5" width="18" height="14" rx="2" /></svg>
+              </span>}
+          <span className="waba-video-play-ring" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" style={{ marginLeft: "2px" }}><path d="m8 5.5 11 6.5-11 6.5Z" /></svg>
+          </span>
+          {dur && <span className="waba-video-dur-pill">{dur}</span>}
+        </button>
+        <button
+          type="button"
+          className="waba-media-save-corner"
+          data-saved={savedName ? "true" : undefined}
+          aria-label={savedName ? (zh ? `已儲存 ${savedName}` : `Saved ${savedName}`) : (zh ? "下載影片" : "Save video")}
+          title={savedName ? (zh ? `已儲存 ${savedName}` : `Saved ${savedName}`) : (zh ? "下載" : "Save")}
+          disabled={saving}
+          aria-busy={saving || undefined}
+          onClick={e => {
+            e.stopPropagation();
+            void saveFile();
+          }}
+        >
+          {saveIcon}
+        </button>
       </div>
-      {savedName && <p className="waba-muted" role="status">{zh ? `已儲存 ${savedName}` : `Saved ${savedName}`}</p>}
-      {inlineError && <ErrorNotice bare>{inlineError}</ErrorNotice>}
       {saveError && <ErrorNotice bare>{saveError}</ErrorNotice>}
       {caption}
     </div>;
   }
 
+  const docMeta = [formatMediaBytes(media.byteLength), mediaBadge(media)].filter(Boolean).join(" · ");
   return <div className="waba-media-card">
-    <div className="waba-media-tile">
-      <span className="waba-media-badge">{mediaBadge(media)}</span>
-      <span className="waba-media-info">
-        <span className="waba-media-title">{label}</span>
-        {summary && <span className="waba-media-sub">{summary}</span>}
+    <div className="waba-doc-card">
+      <span className="waba-doc-badge" data-ext={mediaExtTone(media)}>{mediaBadge(media)}</span>
+      <span className="waba-doc-meta">
+        <span className="waba-doc-name" title={label}>{label}</span>
+        {docMeta && <span className="waba-doc-sub">{docMeta}</span>}
       </span>
+      <button
+        type="button"
+        className="waba-media-icon-btn"
+        data-saved={savedName ? "true" : undefined}
+        aria-label={savedName ? (zh ? `已下載 ${savedName}` : `Saved ${savedName}`) : saveError ? (zh ? "重試下載" : "Retry download") : (zh ? `下載 ${label}` : `Download ${label}`)}
+        title={savedName ? (zh ? `已下載 ${savedName}` : `Saved ${savedName}`) : (zh ? "下載" : "Download")}
+        disabled={saving}
+        aria-busy={saving || undefined}
+        onClick={() => { void saveFile(); }}
+      >
+        {saveIcon}
+      </button>
     </div>
-    <div className="waba-media-actions">
-      <Button size="sm" loading={saving} onClick={() => { void saveFile(); }}>{saveError ? (zh ? "重試" : "Retry") : (zh ? "下載" : "Download")}</Button>
-    </div>
-    {savedName && <p className="waba-muted" role="status">{zh ? `已下載 ${savedName}` : `Downloaded ${savedName}`}</p>}
     {saveError && <ErrorNotice bare>{saveError}</ErrorNotice>}
     {caption}
   </div>;
@@ -1223,21 +1392,25 @@ function MediaLightbox({
   conversationId,
   message,
   media,
+  items,
   loaded,
   zh,
   unavailable,
   closeRef,
   onLoadInline,
+  onSelect,
   onClose,
 }: {
   conversationId: string;
   message: Message;
   media: LinkedMediaInfo;
+  items: Message[];
   loaded: { url: string; mimeType: string; fileName: string | null } | null;
   zh: boolean;
   unavailable: string;
   closeRef: RefObject<HTMLButtonElement | null>;
-  onLoadInline: (messageId: string) => Promise<{ url: string; mimeType: string; fileName: string | null }>;
+  onLoadInline: (messageId: string, priority?: "user" | "auto") => Promise<{ url: string; mimeType: string; fileName: string | null }>;
+  onSelect: (messageId: string) => void;
   onClose: () => void;
 }) {
   const [loading, setLoading] = useState(!loaded?.url);
@@ -1245,18 +1418,30 @@ function MediaLightbox({
   const [saving, setSaving] = useState(false);
   const [savedName, setSavedName] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [zoomed, setZoomed] = useState(false);
+
+  const idx = items.findIndex(m => m.id === message.id);
+  const prevItem = idx > 0 ? items[idx - 1] : null;
+  const nextItem = idx >= 0 && idx < items.length - 1 ? items[idx + 1] : null;
+
+  useEffect(() => {
+    setZoomed(false);
+    setSavedName(null);
+    setSaveError(null);
+    setLoadError(null);
+  }, [message.id]);
 
   const retryLoad = useCallback(() => {
     setLoading(true);
     setLoadError(null);
-    void onLoadInline(message.id).then(
+    void onLoadInline(message.id, "user").then(
       () => setLoading(false),
       (e: unknown) => {
-        setLoadError(errorText(e, zh ? "無法載入完整相片。" : "Couldn’t load full photo."));
+        setLoadError(errorText(e, media.kind === "video" ? (zh ? "無法載入影片。" : "Couldn’t load video.") : (zh ? "無法載入完整相片。" : "Couldn’t load full photo.")));
         setLoading(false);
       },
     );
-  }, [message.id, onLoadInline, zh]);
+  }, [media.kind, message.id, onLoadInline, zh]);
 
   useEffect(() => {
     if (!loaded?.url) retryLoad();
@@ -1265,14 +1450,27 @@ function MediaLightbox({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      onClose();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        onClose();
+        return;
+      }
+      if (e.key === "ArrowLeft" && prevItem) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        onSelect(prevItem.id);
+        return;
+      }
+      if (e.key === "ArrowRight" && nextItem) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        onSelect(nextItem.id);
+      }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
+  }, [nextItem, onClose, onSelect, prevItem]);
 
   async function saveImage() {
     if (saving) return;
@@ -1282,44 +1480,123 @@ function MediaLightbox({
       const res = await channel.saveMedia(conversationId, message.id);
       setSavedName(res.fileName);
     } catch (e) {
-      setSaveError(errorText(e, zh ? "無法下載相片。" : "Couldn’t save photo."));
+      setSaveError(errorText(e, zh ? "無法下載媒體。" : "Couldn’t save media."));
     } finally {
       setSaving(false);
     }
   }
 
-  const title = media.fileName ?? (zh ? "相片" : "Photo");
+  const title = media.fileName ?? mediaKindLabel(media, zh);
   const summary = mediaMetaSummary(media);
+  const poster = message.previewJpeg ? `data:image/jpeg;base64,${message.previewJpeg}` : undefined;
   return <div className="waba-lightbox-backdrop" role="dialog" aria-modal="true" aria-labelledby="waba-lightbox-title" onClick={e => {
     if (e.target === e.currentTarget) onClose();
   }} onKeyDown={e => {
     if (e.key === "Escape") { e.preventDefault(); onClose(); }
   }}>
-    <div className="waba-lightbox">
-      <header className="waba-head">
-        <div>
-          <h3 id="waba-lightbox-title">{title}</h3>
-          {summary && <p className="waba-media-sub">{summary}</p>}
-        </div>
-        <button ref={closeRef} type="button" className="btn" onClick={onClose}>{zh ? "關閉" : "Close"}</button>
-      </header>
-      <div className="waba-lightbox-body">
-        {loaded?.url
-          ? <img className="waba-lightbox-img" src={loaded.url} alt={title} />
+    <header className="waba-lightbox-bar">
+      <div className="waba-lightbox-file">
+        <h3 id="waba-lightbox-title">{title}</h3>
+        {summary && <p>{summary}</p>}
+      </div>
+      {items.length > 1 && idx >= 0
+        ? <span className="waba-lightbox-counter">{idx + 1} / {items.length}</span>
+        : <span aria-hidden="true" />}
+      <div className="waba-lightbox-actions">
+        {media.kind === "image" && loaded?.url && (
+          <button type="button" className="waba-lightbox-ico-btn" onClick={() => setZoomed(z => !z)}>
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 5 5M8.5 10.5h4" />{!zoomed && <path d="M10.5 8.5v4" />}</svg>
+            <span className="waba-lightbox-ico-label">{zoomed ? (zh ? "還原" : "Fit") : (zh ? "放大" : "Zoom")}</span>
+          </button>
+        )}
+        <button
+          type="button"
+          className="waba-lightbox-ico-btn"
+          data-saved={savedName ? "true" : undefined}
+          disabled={saving}
+          aria-busy={saving || undefined}
+          onClick={() => { void saveImage(); }}
+        >
+          {saving
+            ? <span className="waba-inline-spin" aria-hidden="true" />
+            : savedName
+            ? <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m5 12.5 4.2 4.2L19 7" /></svg>
+            : <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5M5 19h14" /></svg>}
+          <span className="waba-lightbox-ico-label">{savedName ? (zh ? "已儲存" : "Saved") : (zh ? "下載" : "Save")}</span>
+        </button>
+        <button ref={closeRef} type="button" className="waba-lightbox-ico-btn" aria-label={zh ? "關閉" : "Close"} onClick={onClose}>
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+        </button>
+      </div>
+    </header>
+    <div className="waba-lightbox-stage" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      {items.length > 1 && (
+        <button
+          type="button"
+          className="waba-lightbox-nav"
+          data-dir="prev"
+          disabled={!prevItem}
+          aria-label={zh ? "上一個媒體" : "Previous media"}
+          onClick={() => { if (prevItem) onSelect(prevItem.id); }}
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 6-6 6 6 6" /></svg>
+        </button>
+      )}
+      <div className="waba-lightbox-media-wrap">
+        {media.kind === "video"
+          ? loaded?.url
+            ? <video key={loaded.url} className="waba-lightbox-video" controls playsInline autoPlay poster={poster} src={loaded.url} />
+            : message.previewJpeg
+            ? <PhotoPreview className="waba-lightbox-poster" jpeg={message.previewJpeg} label={title} unavailable={unavailable} />
+            : null
+          : loaded?.url
+          ? <img className="waba-lightbox-img" src={loaded.url} alt={title} data-zoomed={zoomed ? "true" : undefined} onClick={() => setZoomed(z => !z)} />
           : message.previewJpeg
-          ? <PhotoPreview jpeg={message.previewJpeg} label={title} unavailable={unavailable} />
+          ? <PhotoPreview className="waba-lightbox-img" key={message.previewJpeg} jpeg={message.previewJpeg} label={title} unavailable={unavailable} />
           : null}
-        {loading && <Loading>{zh ? "正在載入完整相片…" : "Loading full image…"}</Loading>}
+        {loading && <div className="waba-lightbox-loading-pill" role="status">
+          <span className="waba-inline-spin" aria-hidden="true" />
+          <span>{media.kind === "video" ? (zh ? "正在載入影片…" : "Loading video…") : (zh ? "正在載入完整相片…" : "Loading full image…")}</span>
+        </div>}
         {loadError && <ErrorNotice onRetry={retryLoad}>{loadError}</ErrorNotice>}
       </div>
-      <footer className="waba-lightbox-foot">
-        <div>{media.caption && <p className="waba-media-caption">{media.caption}</p>}
-          {savedName && <p className="waba-muted" role="status">{zh ? `已儲存 ${savedName}` : `Saved ${savedName}`}</p>}
-          {saveError && <ErrorNotice bare>{saveError}</ErrorNotice>}
-        </div>
-        <Button size="sm" loading={saving} onClick={() => { void saveImage(); }}>{zh ? "下載原圖" : "Save"}</Button>
-      </footer>
+      {items.length > 1 && (
+        <button
+          type="button"
+          className="waba-lightbox-nav"
+          data-dir="next"
+          disabled={!nextItem}
+          aria-label={zh ? "下一個媒體" : "Next media"}
+          onClick={() => { if (nextItem) onSelect(nextItem.id); }}
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+        </button>
+      )}
     </div>
+    <footer className="waba-lightbox-foot">
+      {media.caption && <p className="waba-media-caption">{media.caption}</p>}
+      {savedName && <p className="waba-muted" role="status">{zh ? `已儲存 ${savedName}` : `Saved ${savedName}`}</p>}
+      {saveError && <ErrorNotice bare>{saveError}</ErrorNotice>}
+      {items.length > 1 && <div className="waba-lightbox-thumbs">
+        {items.map(item => (
+          <button
+            key={item.id}
+            type="button"
+            className="waba-lightbox-thumb"
+            aria-current={item.id === message.id ? "true" : undefined}
+            aria-label={item.media?.fileName ?? (item.media ? mediaKindLabel(item.media, zh) : (zh ? "媒體" : "Media"))}
+            onClick={() => onSelect(item.id)}
+          >
+            {item.previewJpeg
+              ? <img src={`data:image/jpeg;base64,${item.previewJpeg}`} alt="" loading="lazy" decoding="async" />
+              : <span className="waba-lightbox-thumb-fallback">{item.media ? mediaBadge(item.media) : "IMG"}</span>}
+            {item.media?.kind === "video" && <span className="waba-lightbox-thumb-play" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="8" height="8" fill="currentColor"><path d="m8 5.5 11 6.5-11 6.5Z" /></svg>
+            </span>}
+          </button>
+        ))}
+      </div>}
+    </footer>
   </div>;
 }
 
