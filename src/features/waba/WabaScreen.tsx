@@ -60,14 +60,74 @@ export default function WabaScreen() {
   const scope = useMemo(() => installScope && provider ? { ...installScope, ...(provider === "linked" ? { provider: "linked" as const } : {}) } : null, [installScope, provider]);
   const [readVersion, setReadVersion] = useState(0);
   const refresh = useCallback(() => { setSaveError(null); setReadVersion(n => n + 1); }, []);
+  const section = snapshot?.route.section;
+  const savedRef = useRef(saved);
+  savedRef.current = saved;
+  const replyDirtyRef = useRef(replyDirty);
+  replyDirtyRef.current = replyDirty;
+  const installScopeRef = useRef(installScope);
+  installScopeRef.current = installScope;
+  const sectionRef = useRef(section);
+  sectionRef.current = section;
+  const mountedRef = useRef(true);
+  const quietSyncSeq = useRef(0);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   useEffect(() => {
     if (!installScope) return;
     let active = true;
+    quietSyncSeq.current += 1;
     setSaved(undefined);
     setReadError(false);
     void readPreferences(installScope).then(value => { if (active) { setSaved(value); setPick(null); } }, () => { if (active) setReadError(true); });
-    return () => { active = false; };
+    return () => { active = false; quietSyncSeq.current += 1; };
   }, [installScope, readVersion]);
+  type SavedPref = Awaited<ReturnType<typeof readPreferences>>;
+  function sameSavedPreferences(a: SavedPref | undefined, b: SavedPref): boolean {
+    if (a === b) return true;
+    if (!a || !b) return false;
+    return (
+      a.revision === b.revision
+      && a.profile.provider === b.profile.provider
+      && a.profile.reply_mode === b.profile.reply_mode
+    );
+  }
+  const syncPreferencesQuiet = useCallback(() => {
+    const activeScope = installScopeRef.current;
+    if (!activeScope || saveInProgress.current || replyDirtyRef.current || savedRef.current === undefined) return;
+    const seq = ++quietSyncSeq.current;
+    void readPreferences(activeScope).then(next => {
+      if (!mountedRef.current || quietSyncSeq.current !== seq || saveInProgress.current || replyDirtyRef.current) return;
+      if (installScopeRef.current !== activeScope || sectionRef.current !== "inbox") return;
+      const prev = savedRef.current;
+      if (prev === undefined || sameSavedPreferences(prev, next)) return;
+      savedRef.current = next;
+      setSaved(next);
+      setPick(null);
+    }, () => {
+      // Quiet sync keeps the loaded Inbox intact when a background read fails.
+    });
+  }, []);
+  const prevSectionRef = useRef(section);
+  useEffect(() => {
+    const prev = prevSectionRef.current;
+    prevSectionRef.current = section;
+    if (section === "inbox" && prev !== undefined && prev !== "inbox") {
+      syncPreferencesQuiet();
+    }
+  }, [section, syncPreferencesQuiet]);
+  useEffect(() => {
+    if (section !== "inbox" || typeof document === "undefined") return;
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        syncPreferencesQuiet();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [section, syncPreferencesQuiet]);
   // No host push within the window: say the host is unreachable instead of waiting forever.
   useEffect(() => { const t = setTimeout(markUnreachable, 15000); return () => clearTimeout(t); }, []);
   const routeFocus = useRef<"inbox" | "connection" | null>(null);
@@ -76,7 +136,6 @@ export default function WabaScreen() {
   const [toolError, setToolError] = useState(false);
   const [localInboxId, setLocalInboxId] = useState<string | null>(null);
   const toolFocus = useRef(false);
-  const section = snapshot?.route.section;
   useLayoutEffect(() => {
     if (routeFocus.current !== section) return;
     routeFocus.current = null;
