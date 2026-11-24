@@ -1,15 +1,15 @@
 import { ApiError,Button,EmptyState,ErrorNotice,Field,Loading,Notice,Select,type SelectOption } from "@cadence/screen-ui";
 import { Fragment,useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState,useSyncExternalStore,type ReactNode,type RefObject } from "react";
-import { channel } from "../../bridge/channel";
+import { channel, type WhatsAppOutboundEcho } from "../../bridge/channel";
 import { patchRoute } from "../../bridge/route";
 import { routable,useOnPush,useScope,type DisplayScope } from "../../bridge/scope";
 import { serviceCall,serviceSlot } from "../../bridge/services";
 import ContactDrawer,{ threadStateLabel } from "./ContactDrawer";
-import { dueLabel,effectiveThreadState,listThreadWork,validWorkRef,type ThreadState,type ThreadWork } from "./inboxWork";
+import { dueLabel,effectiveThreadState,listThreadWork,saveThreadWork,validWorkRef,type ThreadState,type ThreadWork } from "./inboxWork";
 import { useWorkBrowse } from "./useWorkBrowse";
 import { useLivePoll } from "./useLivePoll";
 import type { Recipient } from "./Templates";
-import { declinedReason,errorText,formatMediaBytes,formatMediaDuration,mediaAspectRatio,mediaBadge,mediaExtTone,mediaKindLabel,mediaMetaSummary,parseConversation,parseConversations,parseDraft,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Draft,type LinkedMediaInfo,type Message,type ReplyState,type ReplyStatus } from "./door";
+import { declinedReason,errorText,formatConversationPreview,formatMediaBytes,formatMediaDuration,mediaAspectRatio,mediaBadge,mediaExtTone,mediaKindLabel,mediaMetaSummary,parseConversation,parseConversations,parseDraft,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Draft,type LinkedMediaInfo,type Message,type ReplyState,type ReplyStatus } from "./door";
 
 const PAGE = 25;
 /** What the copilot may show, derived from the host-granted actions (members get the draft read-only). */
@@ -48,7 +48,10 @@ function sameConversationRow(a: ConversationRow, b: ConversationRow): boolean {
         !!b.lastMessage &&
         a.lastMessage.direction === b.lastMessage.direction &&
         a.lastMessage.body === b.lastMessage.body &&
-        a.lastMessage.createdAt === b.lastMessage.createdAt)) &&
+        a.lastMessage.createdAt === b.lastMessage.createdAt &&
+        a.lastMessage.mediaKind === b.lastMessage.mediaKind &&
+        a.lastMessage.fileName === b.lastMessage.fileName &&
+        a.lastMessage.ptt === b.lastMessage.ptt)) &&
     a.unreadCount === b.unreadCount &&
     a.replyMode === b.replyMode &&
     a.freeformUntil === b.freeformUntil &&
@@ -181,6 +184,7 @@ function calendarDay(now: Date) {
 export default function Inbox({ scope, canReply, canTemplate, assist, handoff, routeId: routed, initialId, onRecipient, replyDirty, onDirtyChange, openSettings, tools }: { scope: DisplayScope; canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; routeId: string | null; initialId: string | null; onRecipient: (r: Recipient) => void; replyDirty: boolean; onDirtyChange: (dirty: boolean) => void; openSettings: () => Promise<unknown>; tools: ReactNode }) {
   const zh = useScope()?.presentationLocale === "zh-TW", locale = zh ? "zh" : "en";
   const linked = scope.provider === "linked";
+  const provider: "linked" | "official" = linked ? "linked" : "official";
   const [settingsError, setSettingsError] = useState(false);
   const [rows, setRows] = useState<ConversationRow[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -208,12 +212,22 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
   const openingRequest = useRef(0);
   const [newMessage, setNewMessage] = useState(false);
   const selected = routed ?? local;
+  const drafts = useSyncExternalStore(channel.subscribeDrafts, channel.getDrafts);
+  const manuallyMarkedUnread = useRef<Map<string, string | null>>(new Map());
+  const threadAtBottom = useRef(true);
+  const [openedUnread, setOpenedUnread] = useState<{ id: string; count: number }>({ id: "", count: 0 });
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
   const openRow = useRef<HTMLElement | null>(null);
   const focusThread = useRef(false);
   const thread = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     if (!focusThread.current) return;
     focusThread.current = false;
+    const canFocus = typeof navigator === "undefined" || !navigator.userActivation || navigator.userActivation.isActive;
+    if (!canFocus) return;
     if (newMessage || (selected && !openRow.current?.getClientRects().length)) thread.current?.querySelector<HTMLElement>("h2")?.focus({ preventScroll: true });
     else if (!selected) openRow.current?.focus({ preventScroll: true });
   }, [newMessage, selected]);
@@ -241,8 +255,31 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
         setInboxScope(nextInbox); setWork(emptyWorkIndex()); setWorkError(false);
       }
       setRows(r => {
-        const nextRows = changed ? got.rows : after ? [...r, ...got.rows.filter(n => !r.some(o => o.conversationId === n.conversationId))]
+        const merged = changed ? got.rows : after ? [...r, ...got.rows.filter(n => !r.some(o => o.conversationId === n.conversationId))]
           : quiet ? [...got.rows, ...r.filter(o => !got.rows.some(n => n.conversationId === o.conversationId))] : got.rows;
+        const activeId = selectedRef.current;
+        const visibleNow = typeof document === "undefined" ? true : document.visibilityState === "visible";
+        const nextRows = merged.map(rowItem => {
+          const markedStamp = manuallyMarkedUnread.current.get(rowItem.conversationId);
+          if (markedStamp !== undefined) {
+            if ((rowItem.lastMessage?.createdAt ?? null) === markedStamp) {
+              return rowItem;
+            }
+            manuallyMarkedUnread.current.delete(rowItem.conversationId);
+          }
+          if (
+            activeId &&
+            rowItem.conversationId === activeId &&
+            visibleNow &&
+            threadAtBottom.current &&
+            (rowItem.unreadCount ?? 0) > 0 &&
+            channel.hostUx
+          ) {
+            channel.setThreadUnread(activeId, provider, false);
+            return { ...rowItem, unreadCount: 0 };
+          }
+          return rowItem;
+        });
         return sameConversationRows(r, nextRows) ? r : nextRows;
       });
       setCursor(c => quiet && c && !changed ? c : got.cursor); setList(l => l === "ok" ? l : "ok");
@@ -292,15 +329,84 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
     poll: () => page(null, true),
     intervalMs: LIVE_POLL_MS,
   });
-  function select(id: string | null, observed: Conversation | null = null) {
+  const clearUnread = useCallback((conversationId: string, force = false) => {
+    const existing = rowsRef.current.find(r => r.conversationId === conversationId);
+    const hasUnread = (existing?.unreadCount ?? 0) > 0;
+    manuallyMarkedUnread.current.delete(conversationId);
+    if (!force && !hasUnread) return;
+    setRows(prev => {
+      let updated = false;
+      const next = prev.map(rowItem => {
+        if (rowItem.conversationId !== conversationId || (rowItem.unreadCount ?? 0) === 0) return rowItem;
+        updated = true;
+        return { ...rowItem, unreadCount: 0 };
+      });
+      return updated ? next : prev;
+    });
+    if (channel.hostUx && (hasUnread || (force && linked))) {
+      channel.setThreadUnread(conversationId, provider, false);
+    }
+  }, [linked, provider]);
+  const markUnread = useCallback((conversationId: string) => {
+    const existing = rowsRef.current.find(r => r.conversationId === conversationId);
+    manuallyMarkedUnread.current.set(conversationId, existing?.lastMessage?.createdAt ?? null);
+    setRows(prev => {
+      let updated = false;
+      const next = prev.map(rowItem => {
+        if (rowItem.conversationId !== conversationId) return rowItem;
+        const target = Math.max(1, rowItem.unreadCount ?? 0);
+        if (rowItem.unreadCount === target) return rowItem;
+        updated = true;
+        return { ...rowItem, unreadCount: target };
+      });
+      return updated ? next : prev;
+    });
+    if (channel.hostUx) channel.setThreadUnread(conversationId, provider, true);
+  }, [provider]);
+  const select = useCallback((id: string | null, observed: Conversation | null = null) => {
     openingRequest.current++;
     setOpening(false); setOpenError(false); setResolved(observed);
     setNewMessage(false);
     focusThread.current = true;
+    threadAtBottom.current = true;
+    if (id !== null) {
+      const existing = rowsRef.current.find(r => r.conversationId === id);
+      const countBeforeOpen = Math.max(0, existing?.unreadCount ?? observed?.unreadCount ?? 0);
+      setOpenedUnread({ id, count: countBeforeOpen });
+      clearUnread(id, observed !== null ? countBeforeOpen > 0 : existing === undefined);
+    } else {
+      setOpenedUnread({ id: "", count: 0 });
+    }
     if (scope.provider === "linked") { setLocal(id); return; }
     if (id === null || routable(id)) { setLocal(null); void patchRoute({ section: "inbox", view: "list", record_id: id }).catch(() => undefined); }
     else { setLocal(id); void patchRoute({ section: "inbox", view: "list", record_id: null }).catch(() => undefined); }
-  }
+  }, [clearUnread, scope.provider]);
+  useEffect(() => {
+    return channel.subscribeOpenThread(conversationId => {
+      if (replyDirty) return;
+      const existing = rowsRef.current.find(r => r.conversationId === conversationId);
+      if (existing) {
+        select(conversationId);
+        return;
+      }
+      const request = ++openingRequest.current;
+      setOpening(true);
+      setOpenError(false);
+      void serviceCall(scope, "whatsapp.conversations.show", { conversation_id: conversationId })
+        .then(raw => {
+          if (request !== openingRequest.current) return;
+          const found = parseConversation(raw);
+          select(found.conversationId, found);
+          void page(null, true);
+        })
+        .catch(() => {
+          if (request === openingRequest.current) setOpenError(true);
+        })
+        .finally(() => {
+          if (request === openingRequest.current) setOpening(false);
+        });
+    });
+  }, [scope, page, replyDirty, select]);
   async function openWork(ref: string, source: HTMLElement) {
     if (!inboxScope || !validWorkRef(ref, inboxScope) || opening || replyDirty) return;
     const account = inboxScope, request = ++openingRequest.current;
@@ -328,7 +434,7 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
     const record = recordFor(r);
     if (queue === "unread" ? (r.unreadCount ?? 0) <= 0
       : queue !== "all" && (!r.work || !work.checked.has(r.work.ref) || effectiveThreadState(record, r.work.inboundVersion) !== queue)) return false;
-    return !needle || [record?.name, r.contact.name, contactPhone(r, linked), r.lastMessage?.body].some(v => v?.toLocaleLowerCase().includes(needle));
+    return !needle || [record?.name, r.contact.name, contactPhone(r, linked), r.lastMessage?.body, r.lastMessage?.fileName].some(v => v?.toLocaleLowerCase().includes(needle));
   });
   const pageByRef = useMemo(() => new Map(rows.flatMap(r => r.work ? [[r.work.ref, r] as const] : [])), [rows]);
   const extras = browse.page?.rows.map(row => work.records.get(row.ref) ?? row).filter(r => {
@@ -429,15 +535,14 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
             : state && state !== "needs_reply" ? threadStateLabel(state, zh) : null;
           const flagTone = isDue ? (record!.due! < dueDay ? "overdue" : "due") : state === "done" ? "done" : "waiting";
           const unread = r.unreadCount ?? 0;
-          const lastText = r.lastMessage
-            ? `${r.lastMessage.direction === "outbound" ? (zh ? "你：" : "You: ") : ""}${r.lastMessage.body ?? (zh ? "媒體附件" : "Attachment")}`
-            : "";
+          const draftPreview = r.conversationId !== selected ? drafts[r.conversationId] : undefined;
+          const lastText = formatConversationPreview(r, zh);
           return <li key={r.conversationId}>
             <button type="button" className="waba-row" disabled={replyDirty || opening} aria-current={r.conversationId === selected ? "true" : undefined} data-unread={unread > 0 ? "yes" : undefined} onClick={e => { openRow.current = e.currentTarget; select(r.conversationId); }}>
               <Avatar name={name} phone={phone} group={groupRow} />
               <RowIdentity name={name} phone={linked ? phone : null} />
               {at === null ? <span /> : <time className="waba-row-time" dateTime={r.lastMessage?.createdAt ?? undefined}>{dayFormat[locale].format(at) === today ? timeFormat[locale].format(at) : listDate[locale].format(at)}</time>}
-              <span className="waba-row-last">{lastText}</span>
+              <span className="waba-row-last">{draftPreview ? <><span className="waba-draft-prefix">{zh ? "草稿：" : "Draft: "}</span>{draftPreview}</> : lastText}</span>
               {unread > 0 && <span className="waba-badge" aria-label={zh ? `${unread} 則未讀訊息` : `${unread} unread`}>{unread > 99 ? "99+" : unread}</span>}
               {flag && <span className="waba-row-flag" data-tone={flagTone}>{flag}</span>}
             </button>
@@ -463,7 +568,7 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
     </div>
     <div ref={thread} className="waba-thread">
       {newMessage ? <NewLinkedReply scope={scope} dirty={replyDirty} onDirtyChange={onDirtyChange} onBack={() => select(null)} onChanged={() => { void page(null, true); }} />
-        : selected ? <Thread key={selected} scope={scope} id={selected} initial={resolved} preview={selectedRow} inboxScope={inboxScope} work={work} onWork={remember} canReply={canReply} canTemplate={canTemplate} assist={assist} handoff={handoff} onRecipient={onRecipient} onDirtyChange={onDirtyChange} onBack={() => select(null)} replyDirty={replyDirty} />
+        : selected ? <Thread key={selected} scope={scope} id={selected} initial={resolved} preview={selectedRow} initialUnread={openedUnread.id === selected ? openedUnread.count : 0} inboxScope={inboxScope} work={work} onWork={remember} onMarkUnread={markUnread} onAutoClearUnread={id => { if (!manuallyMarkedUnread.current.has(id)) clearUnread(id, false); }} onAtBottomChange={atBottom => { threadAtBottom.current = atBottom; }} canReply={canReply} canTemplate={canTemplate} assist={assist} handoff={handoff} onRecipient={onRecipient} onDirtyChange={onDirtyChange} onBack={() => select(null)} replyDirty={replyDirty} />
         : <div className="waba-thread-empty">
             <p><strong>{zh ? "選擇對話" : "Select a conversation"}</strong></p>
             <p className="waba-muted">{zh ? "打開對話以查看記錄及回覆。" : "Open a conversation to read and reply."}</p>
@@ -529,8 +634,9 @@ function ThreadSkeleton({ indexing, zh }: { indexing: boolean; zh: boolean }) {
   </div>;
 }
 
-function Thread({ scope, id, initial, preview, inboxScope, work, onWork, canReply, canTemplate, assist, handoff, onRecipient, onDirtyChange, onBack, replyDirty }: {
-  scope: DisplayScope; id: string; initial: Conversation | null; preview: ConversationRow | null; inboxScope: string | null; work: WorkIndex; onWork: (record: ThreadWork) => void;
+function Thread({ scope, id, initial, preview, initialUnread, inboxScope, work, onWork, onMarkUnread, onAutoClearUnread, onAtBottomChange, canReply, canTemplate, assist, handoff, onRecipient, onDirtyChange, onBack, replyDirty }: {
+  scope: DisplayScope; id: string; initial: Conversation | null; preview: ConversationRow | null; initialUnread: number; inboxScope: string | null; work: WorkIndex; onWork: (record: ThreadWork) => void;
+  onMarkUnread: (conversationId: string) => void; onAutoClearUnread: (conversationId: string) => void; onAtBottomChange: (atBottom: boolean) => void;
   canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; onRecipient: (r: Recipient) => void;
   onDirtyChange: (dirty: boolean) => void; onBack: () => void; replyDirty: boolean;
 }) {
@@ -538,6 +644,21 @@ function Thread({ scope, id, initial, preview, inboxScope, work, onWork, canRepl
   const unavailablePreview = zh ? "無法顯示預覽" : "Preview unavailable";
   const [conversation, setConversation] = useState<Load<Conversation>>(() => initial?.conversationId === id ? { state: "ok", value: initial } : { state: "loading" });
   const [messages, setMessages] = useState<Load<{ rows: Message[]; cursor: string | null; previousAnchor?: { row: HTMLElement; top: number } }>>({ state: "loading" });
+  const [unreadDividerCount, setUnreadDividerCount] = useState(() => (initialUnread > 0 ? initialUnread : 0));
+  const [newWhileScrolledUp, setNewWhileScrolledUp] = useState(0);
+  const seenMessageIds = useRef<Set<string> | null>(null);
+  const latestInboundStamp = useRef(0);
+  type OptimisticMessage = { tempId: string; text: string; mediaKind: WhatsAppOutboundEcho["mediaKind"]; fileName: string | null; createdAt: string; status: "pending" | "sent" };
+  const [optimistic, setOptimistic] = useState<OptimisticMessage[]>([]);
+  const [workMenuOpen, setWorkMenuOpen] = useState(false);
+  const [workBusy, setWorkBusy] = useState(false);
+  const workMenuWrap = useRef<HTMLDivElement>(null);
+  const workPillButton = useRef<HTMLButtonElement>(null);
+  const workActionState = useRef<{
+    workLink: { ref: string; inboundVersion: number } | null;
+    record: ThreadWork | undefined;
+    checked: boolean;
+  }>({ workLink: null, record: undefined, checked: false });
   const [indexing, setIndexing] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const messageRequest = useRef(0);
@@ -670,6 +791,9 @@ function Thread({ scope, id, initial, preview, inboxScope, work, onWork, canRepl
     pane.scrollTo({ top: pane.scrollHeight, behavior: "instant" });
     keepBottom.current = true;
     setShowLatest(false);
+    setNewWhileScrolledUp(0);
+    onAtBottomChange(true);
+    onAutoClearUnread(id);
   }
   function closeDetails() {
     setDetails(false);
@@ -788,8 +912,28 @@ function Thread({ scope, id, initial, preview, inboxScope, work, onWork, canRepl
     try { await serviceCall(scope, "whatsapp.draft.discard", { conversation_id: id }); setDraft(null); }
     catch (e) { setAssistNote(errorText(e, "The draft could not be discarded.")); }
   }
+  const autoAdvanceWaiting = useCallback(() => {
+    const current = workActionState.current;
+    if (!inboxScope || !current.workLink || !current.checked) return;
+    if (effectiveThreadState(current.record, current.workLink.inboundVersion) !== "needs_reply") return;
+    void saveThreadWork(
+      scope,
+      current.workLink.ref,
+      {
+        name: current.record?.name ?? null,
+        state: "waiting",
+        due: current.record?.due ?? null,
+        seenInbound: Math.max(current.record?.seenInbound ?? 0, current.workLink.inboundVersion),
+      },
+      current.record?.revision ?? null,
+    ).then(onWork).catch(() => undefined);
+  }, [inboxScope, scope, onWork]);
   // The reply went out: its draft is spent. A failed discard leaves the chip, never a retry loop.
-  const onSent = useCallback(() => { if (assist.discard) void discard(); }, [assist.discard, scope, id]);
+  const onSent = useCallback(() => {
+    setUnreadDividerCount(0);
+    autoAdvanceWaiting();
+    if (assist.discard) void discard();
+  }, [assist.discard, scope, id, autoAdvanceWaiting]);
   const refreshThreadQuiet = useCallback(async (): Promise<boolean> => {
     const results = await Promise.all([show(true), read(null, true)]);
     return results[0] && results[1];
@@ -800,10 +944,83 @@ function Thread({ scope, id, initial, preview, inboxScope, work, onWork, canRepl
     poll: refreshThreadQuiet,
     intervalMs: LIVE_POLL_MS,
   });
+  useEffect(() => {
+    return channel.subscribeOutboundEcho(echo => {
+      if (echo.conversationId !== id) return;
+      if (echo.phase === "pending") {
+        setUnreadDividerCount(0);
+        keepBottom.current = true;
+        setShowLatest(false);
+        setNewWhileScrolledUp(0);
+        onAtBottomChange(true);
+        setOptimistic(prev => [
+          ...prev.filter(item => item.tempId !== echo.tempId),
+          { tempId: echo.tempId, text: echo.text, mediaKind: echo.mediaKind, fileName: echo.fileName, createdAt: echo.createdAt, status: "pending" },
+        ]);
+      } else if (echo.phase === "sent") {
+        setUnreadDividerCount(0);
+        setOptimistic(prev => prev.map(item => item.tempId === echo.tempId ? { ...item, status: "sent" } : item));
+        autoAdvanceWaiting();
+        void refreshThreadQuiet();
+      } else {
+        setOptimistic(prev => prev.filter(item => item.tempId !== echo.tempId));
+      }
+    });
+  }, [id, autoAdvanceWaiting, refreshThreadQuiet, onAtBottomChange]);
   const c = conversation.state === "ok" ? conversation.value : null;
   const ordered = useMemo(() => messages.state === "ok"
     ? [...messages.value.rows].sort((a, b) => (stamp(a.createdAt) ?? 0) - (stamp(b.createdAt) ?? 0))
     : [], [messages]);
+  const visibleOptimistic = useMemo(() => {
+    if (optimistic.length === 0) return [];
+    const matchesServer = (opt: OptimisticMessage) => {
+      const optTime = Date.parse(opt.createdAt);
+      return ordered.some(m => {
+        if (m.direction !== "outbound") return false;
+        const msgTime = stamp(m.createdAt);
+        if (msgTime !== null && Number.isFinite(optTime) && msgTime < optTime - 15_000) return false;
+        return opt.text ? (m.body ?? "") === opt.text : m.media !== null || m.type === "unsupported";
+      });
+    };
+    return optimistic.filter(opt => !matchesServer(opt));
+  }, [optimistic, ordered]);
+  useEffect(() => {
+    if (messages.state !== "ok") return;
+    const prevIds = seenMessageIds.current;
+    const nextIds = new Set(ordered.map(m => m.id));
+    if (prevIds === null) {
+      seenMessageIds.current = nextIds;
+      for (const m of ordered) {
+        if (m.direction !== "outbound") {
+          const ts = stamp(m.createdAt) ?? 0;
+          if (ts > latestInboundStamp.current) latestInboundStamp.current = ts;
+        }
+      }
+      return;
+    }
+    let addedInbound = 0;
+    let maxSeen = latestInboundStamp.current;
+    for (const m of ordered) {
+      if (m.direction !== "outbound") {
+        const ts = stamp(m.createdAt) ?? 0;
+        if (!prevIds.has(m.id) && ts >= latestInboundStamp.current) {
+          addedInbound++;
+        }
+        if (ts > maxSeen) maxSeen = ts;
+      }
+    }
+    latestInboundStamp.current = maxSeen;
+    seenMessageIds.current = nextIds;
+    if (addedInbound > 0 && !keepBottom.current) {
+      setNewWhileScrolledUp(n => n + addedInbound);
+    }
+  }, [messages.state, ordered]);
+  useEffect(() => {
+    if (optimistic.length === 0) return;
+    if (visibleOptimistic.length !== optimistic.length) {
+      setOptimistic(visibleOptimistic);
+    }
+  }, [optimistic.length, visibleOptimistic]);
   const composeId = scope.provider === "linked" && canReply && channel.hostCompose
     && /^[A-Za-z0-9._:-]{1,128}@(s\.whatsapp\.net|lid|g\.us)$/.test(id) ? id : null;
   const replyAvailability = useSyncExternalStore(channel.subscribeReplyAvailability, () => channel.availabilityFor(composeId));
@@ -838,7 +1055,7 @@ function Thread({ scope, id, initial, preview, inboxScope, work, onWork, canRepl
     if (!pane) return;
     if (keepBottom.current) pane.scrollTop = pane.scrollHeight;
     channel.acknowledgeReplyInset(replyInset);
-  }, [messages, details, replyInset]);
+  }, [messages, visibleOptimistic.length, details, replyInset]);
   useLayoutEffect(() => {
     const pane = messagePane.current;
     if (composeId === null || !channel.hostReplyLayout || !pane) return;
@@ -874,6 +1091,52 @@ function Thread({ scope, id, initial, preview, inboxScope, work, onWork, canRepl
   const phone = headerRow ? contactPhone(headerRow, linked) : null;
   const workLink = inboxScope && headerRow?.work && validWorkRef(headerRow.work.ref, inboxScope) ? headerRow.work : null;
   const record = workLink ? work.records.get(workLink.ref) : undefined;
+  workActionState.current = { workLink, record, checked: !!(workLink && work.checked.has(workLink.ref)) };
+  const closeWorkMenu = useCallback((returnFocus = false) => {
+    setWorkMenuOpen(false);
+    if (returnFocus) workPillButton.current?.focus({ preventScroll: true });
+  }, []);
+  useEffect(() => {
+    if (!workMenuOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (workMenuWrap.current && !workMenuWrap.current.contains(event.target as Node)) {
+        closeWorkMenu(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeWorkMenu(true);
+      }
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [workMenuOpen, closeWorkMenu]);
+  async function setQuickWorkState(nextState: ThreadState) {
+    if (!workLink || workBusy) return;
+    setWorkBusy(true);
+    try {
+      const saved = await saveThreadWork(
+        scope,
+        workLink.ref,
+        {
+          name: record?.name ?? null,
+          state: nextState,
+          due: record?.due ?? null,
+          seenInbound: Math.max(record?.seenInbound ?? 0, workLink.inboundVersion),
+        },
+        record?.revision ?? null,
+      );
+      onWork(saved);
+      closeWorkMenu(true);
+    } finally {
+      setWorkBusy(false);
+    }
+  }
   const title = headerRow ? contactName(headerRow, phone, linked, zh, record?.name) : (zh ? "對話" : "Conversation");
   const group = linked && id.endsWith("@g.us");
   const subtitle = group ? (zh ? "WhatsApp 群組" : "WhatsApp group") : phone ?? phoneUnavailable(zh);
@@ -902,17 +1165,72 @@ function Thread({ scope, id, initial, preview, inboxScope, work, onWork, canRepl
       <h2 id="waba-thread-title" tabIndex={-1}>
         {headerRow ? <button className="waba-details-trigger" ref={detailsButton} type="button" disabled={!c} aria-haspopup="dialog" aria-expanded={details} aria-label={`${identity}${zh ? "：" : ": "}${detailsLabel}`} onClick={() => details ? closeDetails() : setDetails(true)}>
           <Avatar name={title} phone={phone} group={group} />
-          <span className="waba-thread-identity">{title === phone ? <bdi dir="ltr">{phone}</bdi> : title}{subtitle !== title && <small className="waba-muted">{phone ? <bdi dir="ltr">{phone}</bdi> : subtitle}</small>}</span>
+          <span className="waba-thread-identity"><span className="waba-thread-title">{title === phone ? <bdi dir="ltr">{phone}</bdi> : title}</span>{subtitle !== title && <small className="waba-muted">{phone ? <bdi dir="ltr">{phone}</bdi> : subtitle}</small>}</span>
           <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M7.5 3v10m-4-10h9A1.5 1.5 0 0 1 14 4.5v7a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5v-7A1.5 1.5 0 0 1 3.5 3Z" /></svg>
         </button> : title}
       </h2>
-      {workLink && work.checked.has(workLink.ref) && (() => {
+      {workLink && work.checked.has(workLink.ref) ? (() => {
         const currentState = effectiveThreadState(record, workLink.inboundVersion);
-        return <button type="button" className="waba-work-pill" disabled={!c} data-state={currentState} aria-haspopup="dialog" aria-expanded={details} onClick={() => details ? closeDetails() : setDetails(true)}>
-          <span className="waba-work-dot" aria-hidden="true" />
-          <span>{threadStateLabel(currentState, zh)}</span>
-        </button>;
-      })()}
+        const states: readonly ThreadState[] = ["needs_reply", "waiting", "done"];
+        return <div ref={workMenuWrap} className="waba-work-menu-wrap">
+          <button
+            ref={workPillButton}
+            type="button"
+            className="waba-work-pill"
+            disabled={!c || workBusy}
+            data-state={currentState}
+            aria-haspopup="menu"
+            aria-expanded={workMenuOpen}
+            onClick={() => setWorkMenuOpen(openNow => !openNow)}
+          >
+            <span className="waba-work-dot" aria-hidden="true" />
+            <span>{threadStateLabel(currentState, zh)}</span>
+          </button>
+          {workMenuOpen && <div className="waba-work-menu" role="menu" aria-label={zh ? "對話狀態" : "Conversation status"}>
+            {states.map(option => (
+              <button
+                key={option}
+                type="button"
+                role="menuitemradio"
+                aria-checked={currentState === option}
+                className="waba-work-menu-item"
+                disabled={workBusy}
+                onClick={() => { void setQuickWorkState(option); }}
+              >
+                <span>{threadStateLabel(option, zh)}</span>
+                {currentState === option && <span className="waba-work-menu-check" aria-hidden="true">✓</span>}
+              </button>
+            ))}
+            <div className="waba-work-menu-sep" role="separator" />
+            {linked && channel.hostUx && (
+              <button
+                type="button"
+                role="menuitem"
+                className="waba-work-menu-item"
+                onClick={() => {
+                  onMarkUnread(id);
+                  closeWorkMenu(true);
+                }}
+              >
+                {zh ? "標記為未讀" : "Mark as unread"}
+              </button>
+            )}
+            <button
+              type="button"
+              role="menuitem"
+              className="waba-work-menu-item"
+              onClick={() => {
+                closeWorkMenu(false);
+                setDetails(true);
+              }}
+            >
+              {`${detailsLabel}…`}
+            </button>
+          </div>}
+        </div>;
+      })() : linked && channel.hostUx ? (
+        <Button size="sm" variant="ghost" onClick={() => onMarkUnread(id)}>{zh ? "標記為未讀" : "Mark as unread"}</Button>
+      ) : null}
     </header>
     <div className="waba-conversation-body">
       <div className="waba-thread-main" ref={messagePane}>
@@ -937,6 +1255,11 @@ function Thread({ scope, id, initial, preview, inboxScope, work, onWork, canRepl
             last.top = top;
             keepBottom.current = pane.scrollHeight - top - height < 72;
             setShowLatest(!keepBottom.current);
+            onAtBottomChange(keepBottom.current);
+            if (keepBottom.current) {
+              setNewWhileScrolledUp(0);
+              onAutoClearUnread(id);
+            }
           }}>
             <div className="waba-timeline-inner">
               {conversation.state === "failed" && <ErrorNotice onRetry={() => { void show(); }}>{conversation.text}</ErrorNotice>}
@@ -944,37 +1267,63 @@ function Thread({ scope, id, initial, preview, inboxScope, work, onWork, canRepl
                 : messages.state === "failed" ? <ErrorNotice onRetry={() => { void read(); }}>{messages.text}</ErrorNotice>
                 : <>
                   {messages.value.cursor && <div className="waba-history-more"><Button size="sm" loading={loadingOlder || indexing} onClick={() => loadOlder(messages.value.cursor!)}>{zh ? "載入較早訊息" : "Load older messages"}</Button></div>}
-                  {!ordered.length ? <EmptyState title={zh ? "沒有訊息" : "No messages"} name="messages" /> : <ol className="waba-messages" aria-label="Messages">{ordered.map((m, index) => {
-                  const at = stamp(m.createdAt), previous = stamp(ordered[index - 1]?.createdAt ?? null);
-                  const date = at === null ? null : day.format(at);
-                  return <Fragment key={m.id}>
-                    {date && (previous === null || day.format(previous) !== date) && <li className="waba-date">{date}</li>}
-                    <li className="waba-message" data-direction={m.direction === "outbound" ? "outbound" : "inbound"}>
-                      {scope.provider === "linked" && m.type === "unsupported"
-                        ? m.media
-                          ? <LinkedMediaMessage
-                              conversationId={id}
-                              message={m}
-                              media={m.media}
-                              loaded={loadedMedia.get(m.id) ?? null}
-                              canDownload={hostMediaDownload}
-                              zh={zh}
-                              unavailable={unavailablePreview}
-                              onLoadInline={loadInlineMedia}
-                              onOpenLightbox={() => setLightboxId(m.id)}
-                            />
-                          : m.previewJpeg
-                            ? <PhotoPreview key={m.previewJpeg} jpeg={m.previewJpeg} label={zh ? "相片預覽" : "Photo preview"} unavailable={unavailablePreview} />
-                            : <p className="waba-muted">{unavailablePreview}</p>
-                        : <p>{m.body ?? (m.type ? `[${m.type}]` : "")}</p>}
-                      {(at !== null || (m.direction === "outbound" && !!m.status)) && <div className="waba-message-meta waba-muted">{at !== null && <time dateTime={m.createdAt!}>{time.format(at)}</time>}{m.direction === "outbound" && m.status ? <MessageStatusTick status={m.status} zh={zh} /> : null}</div>}
-                    </li>
-                  </Fragment>;
-                })}</ol>}
+                  {!ordered.length && !visibleOptimistic.length ? <EmptyState title={zh ? "沒有訊息" : "No messages"} name="messages" /> : <ol className="waba-messages" aria-label="Messages">{(() => {
+                    let unreadDividerId: string | null = null;
+                    if (unreadDividerCount > 0 && ordered.length > 0) {
+                      let remaining = unreadDividerCount;
+                      for (let i = ordered.length - 1; i >= 0; i--) {
+                        if (ordered[i].direction !== "outbound") {
+                          remaining--;
+                          if (remaining === 0) {
+                            unreadDividerId = ordered[i].id;
+                            break;
+                          }
+                        }
+                      }
+                    }
+                    return ordered.map((m, index) => {
+                      const at = stamp(m.createdAt), previous = stamp(ordered[index - 1]?.createdAt ?? null);
+                      const date = at === null ? null : day.format(at);
+                      return <Fragment key={m.id}>
+                        {date && (previous === null || day.format(previous) !== date) && <li className="waba-date">{date}</li>}
+                        {unreadDividerId === m.id && <li className="waba-unread-divider" role="separator"><span>{zh ? `${unreadDividerCount} 則未讀訊息` : `${unreadDividerCount} unread message${unreadDividerCount === 1 ? "" : "s"}`}</span></li>}
+                        <li className="waba-message" data-direction={m.direction === "outbound" ? "outbound" : "inbound"}>
+                          {scope.provider === "linked" && m.type === "unsupported"
+                            ? m.media
+                              ? <LinkedMediaMessage
+                                  conversationId={id}
+                                  message={m}
+                                  media={m.media}
+                                  loaded={loadedMedia.get(m.id) ?? null}
+                                  canDownload={hostMediaDownload}
+                                  zh={zh}
+                                  unavailable={unavailablePreview}
+                                  onLoadInline={loadInlineMedia}
+                                  onOpenLightbox={() => setLightboxId(m.id)}
+                                />
+                              : m.previewJpeg
+                                ? <PhotoPreview key={m.previewJpeg} jpeg={m.previewJpeg} label={zh ? "相片預覽" : "Photo preview"} unavailable={unavailablePreview} />
+                                : <p className="waba-muted">{unavailablePreview}</p>
+                            : <p>{m.body ?? (m.type ? `[${m.type}]` : "")}</p>}
+                          {(at !== null || (m.direction === "outbound" && !!m.status)) && <div className="waba-message-meta waba-muted">{at !== null && <time dateTime={m.createdAt!}>{time.format(at)}</time>}{m.direction === "outbound" && m.status ? <MessageStatusTick status={m.status} zh={zh} /> : null}</div>}
+                        </li>
+                      </Fragment>;
+                    });
+                  })()}{visibleOptimistic.map(opt => {
+                    const optAt = stamp(opt.createdAt);
+                    const optBody = opt.text || (opt.mediaKind === "image" ? `📷 ${zh ? "相片" : "Photo"}` : opt.mediaKind === "video" ? `🎥 ${zh ? "影片" : "Video"}` : opt.mediaKind === "audio" ? `🎤 ${zh ? "語音訊息" : "Voice message"}` : opt.mediaKind === "document" ? `📄 ${opt.fileName || (zh ? "文件" : "Document")}` : "");
+                    return <li key={opt.tempId} className="waba-message" data-direction="outbound" data-optimistic="yes">
+                      <p>{optBody}</p>
+                      <div className="waba-message-meta waba-muted">
+                        {optAt !== null && <time dateTime={opt.createdAt}>{time.format(optAt)}</time>}
+                        <MessageStatusTick status={opt.status} zh={zh} />
+                      </div>
+                    </li>;
+                  })}</ol>}
               </>}
             </div>
           </div>
-          {showLatest && <div className="waba-jump"><Button size="sm" onClick={jumpToLatest}>{zh ? "跳至最新訊息" : "Jump to latest"}</Button></div>}
+          {(showLatest || newWhileScrolledUp > 0) && <div className="waba-jump" data-has-new={newWhileScrolledUp > 0 ? "yes" : undefined}><Button size="sm" onClick={jumpToLatest}>{newWhileScrolledUp > 0 ? (zh ? `↓ ${newWhileScrolledUp} 則新訊息` : `↓ ${newWhileScrolledUp} new message${newWhileScrolledUp === 1 ? "" : "s"}`) : (zh ? "跳至最新訊息" : "Jump to latest")}</Button></div>}
         </div>
         {/* The admitted linked composer is on the board. Official actions and
             the local-composer/read-only footer stay on their existing path. */}
