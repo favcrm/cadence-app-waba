@@ -9,9 +9,17 @@ export interface Status {
 }
 export interface ConnectSession { url: string; expiresAt: string | null }
 export type WorkLink = { ref: string; inboundVersion: number };
+export type ConversationMediaKind = "image" | "video" | "audio" | "document";
 export interface ConversationRow {
   conversationId: string; contact: { name: string | null; phone: string | null };
-  lastMessage: { direction: string | null; body: string | null; createdAt: string | null } | null;
+  lastMessage: {
+    direction: string | null;
+    body: string | null;
+    createdAt: string | null;
+    mediaKind?: ConversationMediaKind | null;
+    fileName?: string | null;
+    ptt?: boolean;
+  } | null;
   unreadCount: number | null; replyMode: string | null; freeformUntil: string | null;
   work: WorkLink | null;
 }
@@ -76,6 +84,10 @@ export function parseConnect(v: unknown): ConnectSession {
   if (url.protocol !== "https:" || url.username || url.password) bad();
   return { url: url.href, expiresAt: str(d.expiresAt) };
 }
+function conversationMediaKind(value: unknown): ConversationMediaKind | null {
+  return value === "image" || value === "video" || value === "audio" || value === "document" ? value : null;
+}
+
 function row(v: unknown): ConversationRow {
   if (!obj(v) || !str(v.conversationId)) bad();
   const c = obj(v.contact) ? v.contact : {}, m = obj(v.lastMessage) ? v.lastMessage : null;
@@ -83,9 +95,32 @@ function row(v: unknown): ConversationRow {
     ? { ref: v.workRef, inboundVersion: v.inboundVersion } : null;
   return {
     conversationId: v.conversationId as string, contact: { name: str(c.name), phone: str(c.phone) },
-    lastMessage: m && { direction: str(m.direction), body: str(m.body), createdAt: str(m.createdAt) },
+    lastMessage: m && {
+      direction: str(m.direction),
+      body: str(m.body),
+      createdAt: str(m.createdAt),
+      mediaKind: conversationMediaKind(m.mediaKind),
+      fileName: str(m.fileName),
+      ptt: m.ptt === true,
+    },
     unreadCount: num(v.unreadCount), replyMode: str(v.replyMode), freeformUntil: str(v.freeformUntil), work,
   };
+}
+
+export function formatConversationPreview(rowItem: ConversationRow, zh: boolean): string {
+  const m = rowItem.lastMessage;
+  if (!m) return "";
+  const prefix = m.direction === "outbound" ? (zh ? "你：" : "You: ") : "";
+  const body = m.body?.trim() ? m.body.trim() : null;
+  if (m.mediaKind === "image") return `${prefix}📷 ${body ?? (zh ? "相片" : "Photo")}`;
+  if (m.mediaKind === "video") return `${prefix}🎥 ${body ?? (zh ? "影片" : "Video")}`;
+  if (m.mediaKind === "audio") {
+    return `${prefix}${m.ptt ? (zh ? "🎤 語音訊息" : "🎤 Voice message") : (zh ? "🎵 音訊" : "🎵 Audio")}`;
+  }
+  if (m.mediaKind === "document") {
+    return `${prefix}📄 ${m.fileName?.trim() || body || (zh ? "文件" : "Document")}`;
+  }
+  return `${prefix}${body ?? (zh ? "媒體附件" : "Attachment")}`;
 }
 export function parseConversations(v: unknown): Page<ConversationRow> & { inboxScope: string | null } {
   const d = door(v);
