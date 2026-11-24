@@ -67,6 +67,20 @@ function refusal(v: unknown): ApiError {
 }
 type ReplyAvailability = "checking" | "blocked" | "verified";
 type ReplyInset = { nomination: number; seq: number; px: number };
+export type WhatsAppUxMediaKind = "image" | "video" | "audio" | "document";
+export type WhatsAppOutboundEcho = {
+  phase: "pending" | "sent" | "failed" | "cancelled";
+  tempId: string;
+  conversationId: string;
+  provider: "linked" | "official";
+  text: string;
+  mediaKind: WhatsAppUxMediaKind | null;
+  fileName: string | null;
+  createdAt: string;
+};
+const EMPTY_DRAFTS: Record<string, string> = {};
+const UX_MEDIA_KINDS = new Set<string>(["image", "video", "audio", "document"]);
+const ECHO_PHASES = new Set<string>(["pending", "sent", "failed", "cancelled"]);
 class Channel {
   private port: MessagePort | null = null;
   private retired = false;
@@ -76,6 +90,12 @@ class Channel {
   private replyLayoutSupported = false;
   private replyOverlaySupported = false;
   private mediaDownloadSupported = false;
+  private uxSupported = false;
+  private drafts: Record<string, string> = EMPTY_DRAFTS;
+  private draftListeners = new Set<() => void>();
+  private pendingOpenThread: string | null = null;
+  private openThreadListeners = new Set<(conversationId: string) => void>();
+  private outboundEchoListeners = new Set<(echo: WhatsAppOutboundEcho) => void>();
   private replyInset: ReplyInset | null = null;
   private acknowledgedInset: ReplyInset | null = null;
   private lastLayout: string | null = null;
@@ -126,6 +146,35 @@ class Channel {
   }
   private pending = new Map<string, Pending>();
   private mediaPending = new Map<string, MediaPending>();
+  get hostUx(): boolean { return this.uxSupported && !this.retired; }
+  getDrafts = (): Record<string, string> => (this.retired ? EMPTY_DRAFTS : this.drafts);
+  subscribeDrafts = (listener: () => void): (() => void) => {
+    this.draftListeners.add(listener);
+    return () => { this.draftListeners.delete(listener); };
+  };
+  subscribeOpenThread = (listener: (conversationId: string) => void): (() => void) => {
+    this.openThreadListeners.add(listener);
+    if (this.pendingOpenThread !== null && !this.retired) {
+      const target = this.pendingOpenThread;
+      this.pendingOpenThread = null;
+      listener(target);
+    }
+    return () => { this.openThreadListeners.delete(listener); };
+  };
+  subscribeOutboundEcho = (listener: (echo: WhatsAppOutboundEcho) => void): (() => void) => {
+    this.outboundEchoListeners.add(listener);
+    return () => { this.outboundEchoListeners.delete(listener); };
+  };
+  setThreadUnread(conversationId: string, provider: "linked" | "official", unread: boolean): void {
+    if (!this.port || this.retired || !this.uxSupported || !printableBounded(conversationId, 256)) return;
+    this.port.postMessage({
+      v: 2,
+      op: "whatsapp-thread-unread",
+      conversation_id: conversationId,
+      provider,
+      unread,
+    });
+  }
   get hostMediaDownload(): boolean { return this.mediaDownloadSupported && !this.retired; }
   downloadMedia(conversationId: string, messageId: string): Promise<DownloadedWhatsAppMedia> {
     return this.requestMedia("inline", conversationId, messageId);
@@ -180,11 +229,13 @@ class Channel {
     this.replyLayoutSupported = this.replyAvailabilitySupported && new URLSearchParams(window.location.search).get("wa_compose_layout") === "1";
     this.replyOverlaySupported = this.replyLayoutSupported && new URLSearchParams(window.location.search).get("wa_compose_inset_ack") === "1";
     this.mediaDownloadSupported = new URLSearchParams(window.location.search).get("wa_media_download") === "1";
+    this.uxSupported = new URLSearchParams(window.location.search).get("wa_ux") === "1";
     pair.port1.postMessage({ v: 1, op: "ready", accepts: ["screen.v2", "screen-records.v1", "screen-locale.v1",
       ...(this.composeSupported ? ["screen-whatsapp-compose.v1"] : []),
       ...(this.replyAvailabilitySupported ? ["screen-whatsapp-reply-availability.v1"] : []),
       ...(this.replyLayoutSupported ? [this.replyOverlaySupported ? "screen-whatsapp-reply-layout.v2" : "screen-whatsapp-reply-layout.v1"] : []),
-      ...(this.mediaDownloadSupported ? ["screen-whatsapp-media.v1"] : [])] });
+      ...(this.mediaDownloadSupported ? ["screen-whatsapp-media.v1"] : []),
+      ...(this.uxSupported ? ["screen-whatsapp-ux.v1"] : [])] });
     window.addEventListener("pagehide", () => this.retire(new ApiError("WhatsApp mount retired", 403)), { once: true });
   }
   request(kind: "call" | "slot", verb: string, args: Record<string, unknown>): Promise<unknown> {
@@ -274,6 +325,66 @@ class Channel {
       m.resolve({ bytes: data.bytes, mimeType: data.mime_type, fileName: data.file_name, sha256: data.sha256 });
       return;
     }
+    if (data.op === "whatsapp-open-thread") {
+      if (!this.uxSupported || !exact(data, ["v", "op", "conversation_id"]) || !printableBounded(data.conversation_id, 256)) {
+        throw invalid();
+      }
+      const conversationId = data.conversation_id;
+      if (this.openThreadListeners.size === 0) {
+        this.pendingOpenThread = conversationId;
+      } else {
+        this.openThreadListeners.forEach(listener => listener(conversationId));
+      }
+      return;
+    }
+    if (data.op === "whatsapp-drafts") {
+      if (!this.uxSupported || !exact(data, ["v", "op", "drafts"]) || !object(data.drafts)) {
+        throw invalid();
+      }
+      const entries = Object.entries(data.drafts);
+      if (entries.length > 50) throw invalid();
+      const next: Record<string, string> = {};
+      for (const [k, v] of entries) {
+        if (!printableBounded(k, 256) || typeof v !== "string" || v.length > 200) throw invalid();
+        next[k] = v;
+      }
+      const keys = Object.keys(next);
+      const prevKeys = Object.keys(this.drafts);
+      const same = keys.length === prevKeys.length && keys.every(k => this.drafts[k] === next[k]);
+      if (!same) {
+        this.drafts = keys.length === 0 ? EMPTY_DRAFTS : next;
+        this.draftListeners.forEach(listener => listener());
+      }
+      return;
+    }
+    if (data.op === "whatsapp-outbound-echo") {
+      if (
+        !this.uxSupported ||
+        !exact(data, ["v", "op", "phase", "temp_id", "conversation_id", "provider", "text", "media_kind", "file_name", "created_at"]) ||
+        typeof data.phase !== "string" || !ECHO_PHASES.has(data.phase) ||
+        !printableBounded(data.temp_id, 128) ||
+        !printableBounded(data.conversation_id, 256) ||
+        (data.provider !== "linked" && data.provider !== "official") ||
+        typeof data.text !== "string" || data.text.length > 4096 ||
+        (data.media_kind !== null && (typeof data.media_kind !== "string" || !UX_MEDIA_KINDS.has(data.media_kind))) ||
+        (data.file_name !== null && !printableBounded(data.file_name, 256)) ||
+        !printableBounded(data.created_at, 64)
+      ) {
+        throw invalid();
+      }
+      const echo: WhatsAppOutboundEcho = {
+        phase: data.phase as WhatsAppOutboundEcho["phase"],
+        tempId: data.temp_id,
+        conversationId: data.conversation_id,
+        provider: data.provider,
+        text: data.text,
+        mediaKind: data.media_kind as WhatsAppUxMediaKind | null,
+        fileName: data.file_name,
+        createdAt: data.created_at,
+      };
+      this.outboundEchoListeners.forEach(listener => listener(echo));
+      return;
+    }
     if (data.op !== "reply" && data.op !== "slot-state") throw invalid();
     if (bytes(data) > 1049600 || typeof data.id !== "string") throw invalid();
     const p = this.pending.get(data.id);
@@ -309,6 +420,8 @@ class Channel {
     this.retired = true;
     this.replyInset = null;
     this.acknowledgedInset = null;
+    this.drafts = EMPTY_DRAFTS;
+    this.pendingOpenThread = null;
     this.port?.close(); this.port = null;
     for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(error); }
     this.pending.clear();
@@ -316,6 +429,7 @@ class Channel {
     this.mediaPending.clear();
     clearScope(error.message);
     this.announceReplyAvailability();
+    this.draftListeners.forEach(listener => listener());
   }
 }
 export const channel = new Channel();
