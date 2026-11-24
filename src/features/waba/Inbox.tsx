@@ -226,6 +226,8 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
   useLayoutEffect(() => {
     if (!focusThread.current) return;
     focusThread.current = false;
+    const canFocus = typeof navigator === "undefined" || !navigator.userActivation || navigator.userActivation.isActive;
+    if (!canFocus) return;
     if (newMessage || (selected && !openRow.current?.getClientRects().length)) thread.current?.querySelector<HTMLElement>("h2")?.focus({ preventScroll: true });
     else if (!selected) openRow.current?.focus({ preventScroll: true });
   }, [newMessage, selected]);
@@ -1321,7 +1323,7 @@ function Thread({ scope, id, initial, preview, initialUnread, inboxScope, work, 
               </>}
             </div>
           </div>
-          {(showLatest || newWhileScrolledUp > 0) && <div className="waba-jump"><Button size="sm" data-has-new={newWhileScrolledUp > 0 ? "yes" : undefined} onClick={jumpToLatest}>{newWhileScrolledUp > 0 ? (zh ? `↓ ${newWhileScrolledUp} 則新訊息` : `↓ ${newWhileScrolledUp} new message${newWhileScrolledUp === 1 ? "" : "s"}`) : (zh ? "跳至最新訊息" : "Jump to latest")}</Button></div>}
+          {(showLatest || newWhileScrolledUp > 0) && <div className="waba-jump" data-has-new={newWhileScrolledUp > 0 ? "yes" : undefined}><Button size="sm" onClick={jumpToLatest}>{newWhileScrolledUp > 0 ? (zh ? `↓ ${newWhileScrolledUp} 則新訊息` : `↓ ${newWhileScrolledUp} new message${newWhileScrolledUp === 1 ? "" : "s"}`) : (zh ? "跳至最新訊息" : "Jump to latest")}</Button></div>}
         </div>
         {/* The admitted linked composer is on the board. Official actions and
             the local-composer/read-only footer stay on their existing path. */}
