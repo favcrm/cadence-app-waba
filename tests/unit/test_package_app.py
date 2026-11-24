@@ -426,13 +426,15 @@ class BuildAndExclusionTests(unittest.TestCase):
         for name in names:
             rel = name.split("/", 1)[1]
             top = rel.split("/", 1)[0]
-            self.assertIn(top, {"app.md", "app-actions.json", "app-assistant.json", "app-chat.json", "app-storage.json", "workflows", "rubrics", "templates", "views", "bindings", "screens", "storage"})
+            self.assertIn(top, {"app.md", "app-actions.json", "app-assistant.json", "app-chat.json", "app-storage.json", "workflows", "rubrics", "templates", "views", "bindings", "screens", "storage", "skills"})
             self.assertFalse(any(p.startswith(".") for p in rel.split("/")))
         self.assertIn(f"{REAL_ROOT}/app.md", names)
         self.assertIn(f"{REAL_ROOT}/workflows/reply-draft.md", names)
         self.assertIn(f"{REAL_ROOT}/app-chat.json", names)
         self.assertIn(f"{REAL_ROOT}/app-storage.json", names)
         self.assertIn(f"{REAL_ROOT}/storage/001-settings.json", names)
+        self.assertIn(f"{REAL_ROOT}/skills/whatsapp-ops/skill.json", names)
+        self.assertIn(f"{REAL_ROOT}/skills/whatsapp-ops/SKILL.md", names)
         self.assertEqual(
             {n for n in names if n.startswith(f"{REAL_ROOT}/screens/")},
             {
@@ -727,6 +729,73 @@ class CliTests(unittest.TestCase):
             archive.write_bytes(b"garbage")
             result = self.run_cli("verify", str(archive))
             self.assertNotEqual(result.returncode, 0)
+
+
+class SkillsPackagingTests(unittest.TestCase):
+    """Bundled skills/<tag>/ packaging and validation parity."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+
+    def _with_skill(self, rels: dict[str, str]) -> Path:
+        return make_bundle(self.dir / "b", extra=rels)
+
+    def test_valid_skill_with_references_builds_and_verifies(self):
+        bundle = self._with_skill(
+            {
+                "skills/ops/skill.json": json.dumps(
+                    {"schema": 1, "name": "ops", "files": ["SKILL.md", "references/guide.md"]}
+                ),
+                "skills/ops/SKILL.md": "---\nname: ops\ndescription: Concise ops skill.\n---\n\n# Ops\n",
+                "skills/ops/references/guide.md": "Details.\n",
+            }
+        )
+        out = self.dir / "out"
+        out.mkdir()
+        rc = pkg.main(["build", "--source", str(bundle), "--outdir", str(out)])
+        self.assertEqual(rc, 0)
+        verified = pkg.verify_archive(out / "waba-0.1.0.tar.gz")
+        self.assertEqual(verified["app"], "waba")
+
+    def test_missing_skill_entry_refuses(self):
+        bundle = self._with_skill(
+            {"skills/ops/skill.json": json.dumps({"schema": 1, "name": "ops", "files": ["SKILL.md"]})}
+        )
+        with self.assertRaisesRegex(pkg.PackageError, "SKILL.md"):
+            pkg.read_contents(bundle, pkg.bundle_files(bundle))
+
+    def test_undeclared_skill_file_refuses(self):
+        bundle = self._with_skill(
+            {
+                "skills/ops/skill.json": json.dumps({"schema": 1, "name": "ops", "files": ["SKILL.md"]}),
+                "skills/ops/SKILL.md": "---\nname: ops\ndescription: Valid.\n---\n\nBody.\n",
+                "skills/ops/extra.md": "undeclared",
+            }
+        )
+        with self.assertRaisesRegex(pkg.PackageError, "present members"):
+            pkg.read_contents(bundle, pkg.bundle_files(bundle))
+
+    def test_bad_skill_manifest_refuses(self):
+        bundle = self._with_skill(
+            {
+                "skills/ops/skill.json": json.dumps({"schema": 2, "name": "ops", "files": ["SKILL.md"]}),
+                "skills/ops/SKILL.md": "---\nname: ops\ndescription: Valid.\n---\n\nBody.\n",
+            }
+        )
+        with self.assertRaisesRegex(pkg.PackageError, "schema"):
+            pkg.read_contents(bundle, pkg.bundle_files(bundle))
+
+    def test_bad_skill_frontmatter_refuses(self):
+        bundle = self._with_skill(
+            {
+                "skills/ops/skill.json": json.dumps({"schema": 1, "name": "ops", "files": ["SKILL.md"]}),
+                "skills/ops/SKILL.md": "---\nname: wrong\ndescription: <bad>\n---\n\nBody.\n",
+            }
+        )
+        with self.assertRaisesRegex(pkg.PackageError, "name"):
+            pkg.read_contents(bundle, pkg.bundle_files(bundle))
 
 
 if __name__ == "__main__":
