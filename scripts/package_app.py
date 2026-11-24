@@ -69,7 +69,7 @@ DESCRIPTOR_CONTRACTS = {
     "app-chat.json": "app-chat/v1",
     "app-storage.json": "app-storage/v1",
 }
-TOP_DIRS = ("workflows", "rubrics", "templates", "views", "bindings", "screens", "storage")
+TOP_DIRS = ("workflows", "rubrics", "templates", "views", "bindings", "screens", "storage", "skills")
 MANIFEST_KEYS = ("app", "title", "version", "needs", "summary", "listing")
 GATED_KEYS = ("records", "actions", "ui", "settings", "actors")
 NEEDS_KEYS = ("connections", "capabilities", "views", "bindings", "requires")
@@ -77,6 +77,19 @@ VIEW_CONTRACT = "app-views/v1"
 BINDING_CONTRACT = "app-bindings/v1"
 VIEWS_FILE = "app-views-v1.json"
 BINDINGS_FILE = "app-bindings-v1.json"
+SKILL_MANIFEST = "skill.json"
+SKILL_ENTRY = "SKILL.md"
+SKILL_ROOT_EXTS = ("md", "txt", "json", "yaml", "yml", "csv", "css", "svg")
+SKILL_NESTED_EXTS = {
+    "references": ("md", "txt"),
+    "scripts": ("py", "sh", "js", "mjs"),
+}
+SKILL_MANIFEST_KEYS = {"schema", "name", "files"}
+SKILL_MAX_FILES = 16
+SKILL_MANIFEST_MAX_BYTES = 4096
+SKILL_FILE_MAX_BYTES = 16384
+SKILL_PACKAGE_MAX_BYTES = 32768
+SKILL_DESCRIPTION_MAX = 240
 MAX_FILE_BYTES = 256 * 1024  # plan::MAX_PLAN_BYTES
 MAX_FILES = 128
 MAX_APP_BYTES = 2 * 1024 * 1024
@@ -603,6 +616,9 @@ def bundle_files(root: Path) -> list[str]:
                     raise PackageError(f"invalid screen member {rel}")
                 files.append(rel)
             continue
+        if top == "skills":
+            files.extend(_collect_skills_dir(root))
+            continue
         for entry in sorted(os.scandir(root / top), key=lambda e: e.name):
             name = entry.name
             rel = f"{top}/{name}"
@@ -668,11 +684,161 @@ def file_cap(rel: str) -> int:
         if rel == "screens/waba/screens.json":
             return 16384
         return 393216 if rel.endswith(".js") else 131072
+    if rel.startswith("skills/"):
+        parts = rel.split("/")
+        if len(parts) == 3 and parts[2] == SKILL_MANIFEST:
+            return SKILL_MANIFEST_MAX_BYTES
+        return SKILL_FILE_MAX_BYTES
     if rel == "app-storage.json":
         return 32768
     if rel.startswith("storage/"):
         return 65536
     return MAX_FILE_BYTES
+
+
+def _skill_leaf_ok(leaf: str, extensions: tuple[str, ...]) -> bool:
+    if not leaf or leaf.startswith(".") or not leaf.isascii() or "\\" in leaf or "\x00" in leaf:
+        return False
+    return any(leaf.endswith(f".{ext}") and len(leaf) > len(ext) + 1 for ext in extensions)
+
+
+def _skill_member_ok(segments: tuple[str, ...]) -> bool:
+    if len(segments) == 1:
+        return _skill_leaf_ok(segments[0], SKILL_ROOT_EXTS)
+    if len(segments) == 2 and segments[0] in SKILL_NESTED_EXTS:
+        return _skill_leaf_ok(segments[1], SKILL_NESTED_EXTS[segments[0]])
+    return False
+
+
+def _collect_skills_dir(root: Path) -> list[str]:
+    skills_dir = root / "skills"
+    out: list[str] = []
+    for tag_entry in sorted(os.scandir(skills_dir), key=lambda e: e.name):
+        tag = tag_entry.name
+        _check_utf8_name(tag, "skills")
+        if tag.startswith("."):
+            raise PackageError(f"app source entry 'skills/{tag}': dotfiles are not app content")
+        if tag_entry.is_symlink():
+            raise PackageError(f"app source entry 'skills/{tag}': symlinks are not allowed")
+        if not tag_entry.is_dir(follow_symlinks=False):
+            raise PackageError(f"app source entry 'skills/{tag}': skills/ holds <tag>/ folders only")
+        _check_tag(tag, "skill name")
+        tag_path = skills_dir / tag
+        tag_files = 0
+        for member in sorted(os.scandir(tag_path), key=lambda e: e.name):
+            name = member.name
+            rel = f"skills/{tag}/{name}"
+            _check_utf8_name(name, f"skills/{tag}")
+            if name.startswith("."):
+                raise PackageError(f"app source entry '{rel}': dotfiles are not app content")
+            if member.is_symlink():
+                raise PackageError(f"app source entry '{rel}': symlinks are not allowed")
+            if member.is_file(follow_symlinks=False):
+                if not _skill_member_ok((name,)):
+                    raise PackageError(f"invalid skill member {rel}")
+                out.append(rel)
+                tag_files += 1
+            elif member.is_dir(follow_symlinks=False):
+                if name not in SKILL_NESTED_EXTS:
+                    raise PackageError(f"app source entry '{rel}': skills subdirs are references/ or scripts/ only")
+                for nested in sorted(os.scandir(tag_path / name), key=lambda e: e.name):
+                    nname = nested.name
+                    nrel = f"{rel}/{nname}"
+                    _check_utf8_name(nname, rel)
+                    if nname.startswith("."):
+                        raise PackageError(f"app source entry '{nrel}': dotfiles are not app content")
+                    if nested.is_symlink():
+                        raise PackageError(f"app source entry '{nrel}': symlinks are not allowed")
+                    if nested.is_dir(follow_symlinks=False):
+                        raise PackageError(f"app source entry '{nrel}': skills depth exceeds 2")
+                    if not nested.is_file(follow_symlinks=False) or not _skill_member_ok((name, nname)):
+                        raise PackageError(f"invalid skill member {nrel}")
+                    out.append(nrel)
+                    tag_files += 1
+            else:
+                raise PackageError(f"app source entry '{rel}': not a regular file")
+        if tag_files == 0:
+            raise PackageError(f"app source entry 'skills/{tag}': skill package directory is empty")
+    return out
+
+
+def check_skills_bytes(contents: list[tuple[str, bytes]], where: str) -> None:
+    by_tag: dict[str, dict[str, bytes]] = {}
+    for rel, data in contents:
+        if not rel.startswith("skills/"):
+            continue
+        parts = PurePosixPath(rel).parts
+        if len(parts) < 3 or len(parts) > 4 or not TAG_RE.match(parts[1]) or not _skill_member_ok(parts[2:]):
+            raise PackageError(f"{where}: invalid skill member path {rel}")
+        tag = parts[1]
+        member = "/".join(parts[2:])
+        by_tag.setdefault(tag, {})[member] = data
+
+    def closed_pairs(pairs):
+        out = {}
+        for k, v in pairs:
+            if k in out:
+                raise PackageError(f"{where}: duplicate key {k} in {SKILL_MANIFEST}")
+            out[k] = v
+        return out
+
+    for tag, files_map in sorted(by_tag.items()):
+        if len(files_map) > SKILL_MAX_FILES:
+            raise PackageError(f"{where}: skills/{tag}/ carries {len(files_map)} files — at most {SKILL_MAX_FILES}")
+        if sum(len(v) for v in files_map.values()) > SKILL_PACKAGE_MAX_BYTES:
+            raise PackageError(f"{where}: skills/{tag}/ exceeds {SKILL_PACKAGE_MAX_BYTES} bytes")
+        if SKILL_MANIFEST not in files_map:
+            raise PackageError(f"{where}: skills/{tag}/ has no {SKILL_MANIFEST}")
+        if SKILL_ENTRY not in files_map:
+            raise PackageError(f"{where}: skills/{tag}/ has no {SKILL_ENTRY}")
+        manifest_raw = files_map[SKILL_MANIFEST]
+        if len(manifest_raw) > SKILL_MANIFEST_MAX_BYTES:
+            raise PackageError(f"{where}: skills/{tag}/{SKILL_MANIFEST} exceeds {SKILL_MANIFEST_MAX_BYTES} bytes")
+        try:
+            doc = json.loads(manifest_raw.decode("utf-8"), object_pairs_hook=closed_pairs)
+        except (UnicodeDecodeError, ValueError) as e:
+            raise PackageError(f"{where}: skills/{tag}/{SKILL_MANIFEST}: invalid JSON — {e}") from e
+        if not isinstance(doc, dict) or set(doc) != SKILL_MANIFEST_KEYS:
+            raise PackageError(f"{where}: skills/{tag}/{SKILL_MANIFEST} must hold exactly schema, name and files")
+        if type(doc["schema"]) is not int or doc["schema"] != 1:
+            raise PackageError(f"{where}: skills/{tag}/{SKILL_MANIFEST} schema must be integer 1")
+        if doc["name"] != tag:
+            raise PackageError(f"{where}: skills/{tag}/{SKILL_MANIFEST} name must match directory '{tag}'")
+        declared = doc["files"]
+        if (
+            not isinstance(declared, list)
+            or not declared
+            or any(not isinstance(item, str) or item == SKILL_MANIFEST for item in declared)
+            or len(set(declared)) != len(declared)
+        ):
+            raise PackageError(f"{where}: skills/{tag}/{SKILL_MANIFEST} files list is invalid")
+        present_members = {k for k in files_map if k != SKILL_MANIFEST}
+        if SKILL_ENTRY not in declared or set(declared) != present_members:
+            raise PackageError(
+                f"{where}: skills/{tag}/{SKILL_MANIFEST} files must match present members in both directions"
+            )
+        try:
+            entry_text = files_map[SKILL_ENTRY].decode("utf-8")
+        except UnicodeDecodeError as e:
+            raise PackageError(f"{where}: skills/{tag}/{SKILL_ENTRY}: not UTF-8") from e
+        front, _ = _split_front(entry_text, f"skills/{tag}/{SKILL_ENTRY}")
+        desc: str | None = None
+        front_name: str | None = None
+        for line in front.splitlines():
+            if not line.strip() or line.lstrip().startswith("#") or ":" not in line or line[0] == " ":
+                continue
+            k, _, v = line.partition(":")
+            k = k.strip()
+            if k == "name":
+                front_name = _unquote(v, f"skills/{tag}/{SKILL_ENTRY} `name:`")
+            elif k == "description":
+                desc = _unquote(v, f"skills/{tag}/{SKILL_ENTRY} `description:`")
+        if front_name is not None and front_name != tag:
+            raise PackageError(f"{where}: skills/{tag}/{SKILL_ENTRY} `name:` must match '{tag}'")
+        if desc is None or not desc.strip() or len(desc.strip()) > SKILL_DESCRIPTION_MAX or "<" in desc or ">" in desc:
+            raise PackageError(
+                f"{where}: skills/{tag}/{SKILL_ENTRY} requires a 1..{SKILL_DESCRIPTION_MAX} char description without angle brackets"
+            )
 
 
 def check_screen_bytes(contents: list[tuple[str, bytes]], where: str) -> None:
@@ -802,6 +968,7 @@ def check_file_bytes(contents: list[tuple[str, bytes]], where: str) -> None:
     (relpath, bytes) list; never call this on unbounded untrusted input.
     """
     check_screen_bytes(contents, where)
+    check_skills_bytes(contents, where)
     total = 0
     for rel, data in contents:
         if len(data) > file_cap(rel):
@@ -1220,6 +1387,13 @@ def _check_member_tree(rels: list[str], archive_name: str) -> None:
             files.append(rel)
             dirs.add("screens")
             continue
+        if len(parts) in (3, 4) and parts[0] == "skills":
+            _check_tag(parts[1], "skill name")
+            if not _skill_member_ok(parts[2:]):
+                raise PackageError(f"{archive_name}: invalid skill member {rel}")
+            files.append(rel)
+            dirs.add("skills")
+            continue
         if len(parts) != 2 or rel.endswith("/"):
             # A rel that is not exactly `top/name`, or a file member whose
             # name ends in `/` (masquerading as a directory entry), has no
@@ -1231,6 +1405,8 @@ def _check_member_tree(rels: list[str], archive_name: str) -> None:
         top, name = parts
         if top == "screens":
             raise PackageError(f"{archive_name}: screen files belong only under screens/waba/")
+        if top == "skills":
+            raise PackageError(f"{archive_name}: skill files belong under skills/<tag>/")
         if top not in TOP_DIRS:
             raise PackageError(
                 f"{archive_name}: member {rel} — v0 knows app.md, workflows/, "
@@ -1275,7 +1451,18 @@ def _check_member_dir(drel: str, archive_name: str, prefix: str, full: str) -> N
         )
     if drel.rstrip("/") == "screens/waba":
         return
-    if not drel or "/" in drel.rstrip("/"):
+    clean_dir = drel.rstrip("/")
+    dir_parts = PurePosixPath(clean_dir).parts
+    if dir_parts and dir_parts[0] == "skills":
+        if len(dir_parts) == 1:
+            return
+        if len(dir_parts) == 2:
+            _check_tag(dir_parts[1], "skill name")
+            return
+        if len(dir_parts) == 3 and dir_parts[2] in SKILL_NESTED_EXTS:
+            _check_tag(dir_parts[1], "skill name")
+            return
+    if not drel or "/" in clean_dir:
         raise PackageError(
             f"{archive_name}: directory member {full} — v0 app dirs are flat, "
             "no nested folders"

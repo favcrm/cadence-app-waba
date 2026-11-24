@@ -1,7 +1,7 @@
 ---
 app: waba
 title: WhatsApp Business
-version: '0.4.4'
+version: '0.4.5'
 summary: Use the official WhatsApp Business connection or a test-only linked device for the inbox and owner-approved replies. The app holds no credentials.
 needs:
   connections: []
@@ -148,13 +148,17 @@ Workspace MCP tokens, grant matching scopes (`whatsapp.read`, `whatsapp.stage`,
 
 - **Read & reconcile (`whatsapp_read` / `whatsapp.read`):**
   `whatsapp.status` (available without elevated tier), `whatsapp.conversations.list`,
-  `whatsapp.conversations.show`, `whatsapp.messages`, `whatsapp.reply.status`,
+  `whatsapp.conversations.search` (bounded scan by `query`, `phone` digits, or Official `unread_only`),
+  `whatsapp.conversations.show`, `whatsapp.messages`,
+  `whatsapp.messages.search` (bounded scan by `query`, `conversation_id`, `direction`, `has_media`, `since`/`until`),
+  `whatsapp.reply.status`,
   `whatsapp.draft.show`, `whatsapp.media.read` (returns bounded metadata, SHA-256, and
   artifact/media handle — never raw provider URLs), Official catalog/campaign reads
   (`whatsapp.templates.list`, `whatsapp.template.show`, `whatsapp.template.status`,
   `whatsapp.broadcasts.list`, `whatsapp.broadcast.show`, `whatsapp.broadcast.estimate`,
   `whatsapp.broadcast.results`), and `records.list` / `records.show` on `inbox_work` and
-  `inbox_notes`.
+  `inbox_notes`. Read the bundled operational playbook via
+  `app_skill { app: "waba", skill: "whatsapp-ops" }`.
 - **Non-sending drafts (`whatsapp_stage` / `whatsapp.stage`):**
   `whatsapp.reply.draft` and `whatsapp.draft.discard` (both modes), plus Official
   `whatsapp.broadcast.draft`. Never sends external messages.
