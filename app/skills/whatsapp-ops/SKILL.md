@@ -34,18 +34,25 @@ Prefer bounded server-side search before paging through raw lists:
   - Search local saved Linked contact names, statuses (`open`, `waiting`, `done`), or follow-up dates via `records.list` / `records.show` on `inbox_work` and `inbox_notes`.
   - Stage local contact/triage updates (`records.create` / `records.update`) with an explicit `idempotency_key`. Follow-ups never send WhatsApp messages.
 
-## 3. Reply Workflow: Draft vs Stage
+## 3. Reply Workflow: Draft vs Stage (Existing Threads vs New Contacts)
 
 Choose the least-privileged action the operator asked for:
 
-1. **Draft (`whatsapp.reply.draft`, no external send):**
+1. **Draft (`whatsapp.reply.draft`, existing thread only, no external send):**
    - Read the latest messages first, then pass `{ provider, conversation_id, text, basis_message_id }`.
    - Use `whatsapp.draft.show` to inspect and `whatsapp.draft.discard` to remove a parked draft.
 2. **Stage for Owner Approval (`whatsapp.reply.stage`, creates Home approval card):**
-   - Requires `whatsapp.stage` + `apps.stage` scopes and a unique `idempotency_key`.
-   - Before staging on `"official"`, call `whatsapp.conversations.show`: if `replyMode !== "freeform"` or the 24-hour `freeformUntil` window expired, use an approved template (`whatsapp.template.stage`) instead.
+   - Requires `whatsapp.stage` + `apps.stage` scopes and a unique `idempotency_key`. Every staged send is Tier 2 HITL and waits for owner approval in Home before anything leaves the workspace.
+   - **Existing thread (`conversation_id`):** Pass `{ provider, conversation_id, text?, attachment? }`. Before staging on `"official"`, call `whatsapp.conversations.show`: if `replyMode !== "freeform"` or the 24-hour `freeformUntil` window expired, use an approved template (`whatsapp.template.stage`) instead.
+   - **First-contact / new number (`recipient_phone`, mutually exclusive with `conversation_id`):**
+     - Pass `{ provider: "linked", recipient_phone: "+<E.164>", text?, attachment? }` (e.g., `"+85261034412"`). The host normalizes strict E.164 numbers to `<digits>@s.whatsapp.net` and visibly badges the Home approval card as a first-contact send (`New contact (first-contact send)`). Never pass both `conversation_id` and `recipient_phone`.
+     - On `"official"` (Cloud API), free-form `recipient_phone` staging is refused outside the 24-hour customer-service window — use an approved template (`whatsapp.template.stage`) instead.
    - Attachments require `{ media_ref | artifact_id, sha256 }` matching a prior `whatsapp.media.read` or uploaded artifact; WhatsApp audio refuses captions (`text`).
-   - Track staged approvals via `board_pending_actions` and delivery receipts via `whatsapp.reply.status { provider, effect_id }`.
+3. **Owner Approval Link & Post-Approval Reconciliation:**
+   - Staging returns `{ staged: true, actionId, status: "pending", approval_state: "pending_owner_approval", approval_url, reconcile_with: "board_pending_actions" }`.
+   - Always share `approval_url` (`/?action=<actionId>`) directly with the workspace owner so they can open and approve or deny the card in Home in one click.
+   - Reconcile pending approvals with `board_pending_actions` (never pass a pending Home `actionId` to `whatsapp.reply.status`).
+   - Once approved and executed, `board_pending_actions` / the action result records the WhatsApp `effect_id` (`wae_...`); pass that `effect_id` to `whatsapp.reply.status { provider, effect_id }` to check delivery state.
 
 ## 4. Official API Templates, Broadcasts & Handoff
 
