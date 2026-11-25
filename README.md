@@ -36,6 +36,7 @@ built on the host's pinned screen-ui SDK.
 - **Bundled ops skill & search docs (`0.4.5`).** Ships `app/skills/whatsapp-ops/{skill.json,SKILL.md}` for `app_skill` agent discovery, adds `skills/` validation and packaging support to `scripts/package_app.py`, and documents `whatsapp.conversations.search` and `whatsapp.messages.search` in `app/app.md`.
 - **Unread triage, drafts & UX polish (`0.5.0`).** Adds `screen-whatsapp-ux.v1` host sync (`wa_ux=1`) for unread auto-clear/mark-as-unread, deep-link thread navigation, `"Draft: ..."` and rich media (`📷`/`🎥`/`🎤`/`🎵`/`📄`) rail previews, 1-click `.waba-work-pill` status popover with auto-advance on reply send, optimistic outbound bubbles, `"N unread messages"` divider and scrolled-up `"↓ N new messages"` jump pill, plus mobile header ellipsis, button descender clipping, and light-mode tick WCAG contrast fixes.
 - **Official API media & unread parity (`0.5.1`).** Passes the active `provider` (`"linked" | "official"`) on host media download/save calls, renders inbound media previews for Official API messages when `media` metadata is present, and enables `channel.hostUx` mark-unread and auto-clear unread sync on Official API threads.
+- **First-contact E.164 & approval UX docs (`0.5.2`).** Updates `app/skills/whatsapp-ops/SKILL.md` to document E.164 `recipient_phone` first-contact staging (`linked` HITL vs `official` template-only), direct `approval_url` (`/?action=<actionId>`) deep-linking, and `effect_id` status readback (`AOS-774`).
 
 Plan: cadence CAD-1465 (`cad1465-waba-plan-20261018.md`).
 
