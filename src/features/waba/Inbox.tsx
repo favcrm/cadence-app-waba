@@ -343,10 +343,10 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
       });
       return updated ? next : prev;
     });
-    if (channel.hostUx && (hasUnread || (force && linked))) {
+    if (channel.hostUx && (hasUnread || force)) {
       channel.setThreadUnread(conversationId, provider, false);
     }
-  }, [linked, provider]);
+  }, [provider]);
   const markUnread = useCallback((conversationId: string) => {
     const existing = rowsRef.current.find(r => r.conversationId === conversationId);
     manuallyMarkedUnread.current.set(conversationId, existing?.lastMessage?.createdAt ?? null);
@@ -712,10 +712,11 @@ function Thread({ scope, id, initial, preview, initialUnread, inboxScope, work, 
       loaded.clear();
     };
   }, []);
+  const mediaProvider: "linked" | "official" = scope.provider === "linked" ? "linked" : "official";
   const runInlineFetch = useCallback((messageId: string): Promise<LoadedInlineMedia> => {
     const active = inlineInFlight.current.get(messageId);
     if (active) return active;
-    const promise = channel.downloadMedia(id, messageId).then(downloaded => {
+    const promise = channel.downloadMedia(id, messageId, mediaProvider).then(downloaded => {
       if (!mediaMounted.current) {
         return { url: "", mimeType: downloaded.mimeType, fileName: downloaded.fileName };
       }
@@ -732,7 +733,7 @@ function Thread({ scope, id, initial, preview, initialUnread, inboxScope, work, 
     });
     inlineInFlight.current.set(messageId, promise);
     return promise;
-  }, [id]);
+  }, [id, mediaProvider]);
   const drainAutoQueue = useCallback(() => {
     while (mediaMounted.current && autoRunning.current < 1 && autoQueue.current.length > 0) {
       const task = autoQueue.current.pop()!;
@@ -1202,7 +1203,7 @@ function Thread({ scope, id, initial, preview, initialUnread, inboxScope, work, 
               </button>
             ))}
             <div className="waba-work-menu-sep" role="separator" />
-            {linked && channel.hostUx && (
+            {channel.hostUx && (
               <button
                 type="button"
                 role="menuitem"
@@ -1228,7 +1229,7 @@ function Thread({ scope, id, initial, preview, initialUnread, inboxScope, work, 
             </button>
           </div>}
         </div>;
-      })() : linked && channel.hostUx ? (
+      })() : channel.hostUx ? (
         <Button size="sm" variant="ghost" onClick={() => onMarkUnread(id)}>{zh ? "標記為未讀" : "Mark as unread"}</Button>
       ) : null}
     </header>
@@ -1288,10 +1289,11 @@ function Thread({ scope, id, initial, preview, initialUnread, inboxScope, work, 
                         {date && (previous === null || day.format(previous) !== date) && <li className="waba-date">{date}</li>}
                         {unreadDividerId === m.id && <li className="waba-unread-divider" role="separator"><span>{zh ? `${unreadDividerCount} 則未讀訊息` : `${unreadDividerCount} unread message${unreadDividerCount === 1 ? "" : "s"}`}</span></li>}
                         <li className="waba-message" data-direction={m.direction === "outbound" ? "outbound" : "inbound"}>
-                          {scope.provider === "linked" && m.type === "unsupported"
+                          {m.media || (scope.provider === "linked" && m.type === "unsupported")
                             ? m.media
                               ? <LinkedMediaMessage
                                   conversationId={id}
+                                  provider={mediaProvider}
                                   message={m}
                                   media={m.media}
                                   loaded={loadedMedia.get(m.id) ?? null}
@@ -1376,6 +1378,7 @@ function Thread({ scope, id, initial, preview, initialUnread, inboxScope, work, 
     />}
     {lightboxMessage?.media && <MediaLightbox
       conversationId={id}
+      provider={mediaProvider}
       message={lightboxMessage}
       media={lightboxMessage.media}
       items={visualMedia}
@@ -1456,6 +1459,7 @@ function unavailableReasonText(reason: LinkedMediaInfo["unavailableReason"], zh:
 
 function LinkedMediaMessage({
   conversationId,
+  provider,
   message,
   media,
   loaded,
@@ -1466,6 +1470,7 @@ function LinkedMediaMessage({
   onOpenLightbox,
 }: {
   conversationId: string;
+  provider: "linked" | "official";
   message: Message;
   media: LinkedMediaInfo;
   loaded: { url: string; mimeType: string; fileName: string | null } | null;
@@ -1553,7 +1558,7 @@ function LinkedMediaMessage({
     setSaving(true);
     setSaveError(null);
     try {
-      const saved = await channel.saveMedia(conversationId, message.id);
+      const saved = await channel.saveMedia(conversationId, message.id, provider);
       setSavedName(saved.fileName);
     } catch (e) {
       setSaveError(errorText(e, zh ? "無法下載檔案。" : "Couldn’t save attachment."));
@@ -1782,6 +1787,7 @@ function LinkedMediaMessage({
 
 function MediaLightbox({
   conversationId,
+  provider,
   message,
   media,
   items,
@@ -1795,6 +1801,7 @@ function MediaLightbox({
   onClose,
 }: {
   conversationId: string;
+  provider: "linked" | "official";
   message: Message;
   media: LinkedMediaInfo;
   items: Message[];
@@ -1871,7 +1878,7 @@ function MediaLightbox({
     setSaving(true);
     setSaveError(null);
     try {
-      const res = await channel.saveMedia(conversationId, message.id);
+      const res = await channel.saveMedia(conversationId, message.id, provider);
       setSavedName(res.fileName);
     } catch (e) {
       setSaveError(errorText(e, zh ? "無法下載媒體。" : "Couldn’t save media."));
