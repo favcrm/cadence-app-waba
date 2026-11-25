@@ -176,15 +176,15 @@ class Channel {
     });
   }
   get hostMediaDownload(): boolean { return this.mediaDownloadSupported && !this.retired; }
-  downloadMedia(conversationId: string, messageId: string): Promise<DownloadedWhatsAppMedia> {
-    return this.requestMedia("inline", conversationId, messageId);
+  downloadMedia(conversationId: string, messageId: string, provider?: "linked" | "official"): Promise<DownloadedWhatsAppMedia> {
+    return this.requestMedia("inline", conversationId, messageId, provider);
   }
-  saveMedia(conversationId: string, messageId: string): Promise<SavedWhatsAppMedia> {
-    return this.requestMedia("download", conversationId, messageId);
+  saveMedia(conversationId: string, messageId: string, provider?: "linked" | "official"): Promise<SavedWhatsAppMedia> {
+    return this.requestMedia("download", conversationId, messageId, provider);
   }
-  private requestMedia(kind: "inline", conversationId: string, messageId: string): Promise<DownloadedWhatsAppMedia>;
-  private requestMedia(kind: "download", conversationId: string, messageId: string): Promise<SavedWhatsAppMedia>;
-  private requestMedia(kind: "inline" | "download", conversationId: string, messageId: string): Promise<DownloadedWhatsAppMedia | SavedWhatsAppMedia> {
+  private requestMedia(kind: "inline", conversationId: string, messageId: string, provider?: "linked" | "official"): Promise<DownloadedWhatsAppMedia>;
+  private requestMedia(kind: "download", conversationId: string, messageId: string, provider?: "linked" | "official"): Promise<SavedWhatsAppMedia>;
+  private requestMedia(kind: "inline" | "download", conversationId: string, messageId: string, provider?: "linked" | "official"): Promise<DownloadedWhatsAppMedia | SavedWhatsAppMedia> {
     if (!this.port || this.retired || !this.mediaDownloadSupported) {
       return Promise.reject(new ApiError("Media download bridge is unavailable.", 503, { code: "unavailable" }));
     }
@@ -205,7 +205,15 @@ class Channel {
       } else {
         this.mediaPending.set(id, { kind: "download", resolve: resolve as (v: SavedWhatsAppMedia) => void, reject, timer });
       }
-      this.port!.postMessage({ v: 2, op: "whatsapp-media", id, conversation_id: conversationId, message_id: messageId, disposition: kind });
+      this.port!.postMessage({
+        v: 2,
+        op: "whatsapp-media",
+        id,
+        conversation_id: conversationId,
+        message_id: messageId,
+        disposition: kind,
+        ...(provider === "official" ? { provider: "official" } : {}),
+      });
     });
   }
   start(): void {

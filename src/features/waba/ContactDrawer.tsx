@@ -373,7 +373,7 @@ export default function ContactDrawer({
     setSavingMediaId(messageId);
     setMediaSaveError(null);
     try {
-      await channel.saveMedia(conversationId, messageId);
+      await channel.saveMedia(conversationId, messageId, scope.provider === "linked" ? "linked" : "official");
       setSavedMediaIds(curr => new Set(curr).add(messageId));
     } catch (e) {
       setMediaSaveError(errorText(e, zh ? "無法下載檔案。" : "Couldn’t save attachment."));
