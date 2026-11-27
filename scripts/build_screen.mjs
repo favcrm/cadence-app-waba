@@ -60,7 +60,27 @@ await build({configFile:false,root,define:{'process.env.NODE_ENV':'"production"'
 }
 const assets=['runtime.js','client.js','waba.css'].map(path=>{const body=readFileSync(join(out,path));const cap=path.endsWith('.js')?393216:131072;if(body.length>cap)throw new Error(`${path}: ${body.length} exceeds ${cap}`);return {name:path,media_type:path.endsWith('.js')?'text/javascript':'text/css',size:body.length,sha256:`sha256:${hash(body)}`};});
 if(assets.reduce((n,a)=>n+a.size,0)>524288)throw new Error('Screen total exceeds 524288 bytes');
-const decl={contract:'app-screens/v2',app:'waba',entry:'client.js',startup:['runtime.js','client.js'],assets,provenance:{source_digest:`sha256:${sourceDigest()}`,sdk_digest:`sha256:${env.pin.archive.sha256}`,toolchain_digest:`sha256:${hash(JSON.stringify(env.pin.toolchain))}`},host_contract:'screen-records.v1',may:['records.call','records.slot'],tools:{},operations,navigation:{section_query:'waba',default_section:'inbox',sections:[{id:'inbox',label:'Inbox'},{id:'connection',label:'Settings'}]}};
+const views=[
+  {
+    id:'conversation',
+    label:{en:'Conversation','zh-TW':'對話'},
+    section:'inbox',
+    params:{
+      id:{type:'string',required:true},
+      provider:{type:'enum',values:['official','linked'],labels:{official:{en:'Official API','zh-TW':'官方 API'},linked:{en:'Linked device','zh-TW':'已連結裝置'}}},
+    },
+  },
+  {
+    id:'inbox',
+    label:{en:'Inbox','zh-TW':'收件匣'},
+    section:'inbox',
+    params:{
+      filter:{type:'enum',values:['all','unread','needs_reply','due'],labels:{all:{en:'All','zh-TW':'全部'},unread:{en:'Unread','zh-TW':'未讀'},needs_reply:{en:'Needs reply','zh-TW':'待回覆'},due:{en:'Follow-ups due','zh-TW':'待跟進'}}},
+      provider:{type:'enum',values:['official','linked'],labels:{official:{en:'Official API','zh-TW':'官方 API'},linked:{en:'Linked device','zh-TW':'已連結裝置'}}},
+    },
+  },
+];
+const decl={contract:'app-screens/v2',app:'waba',entry:'client.js',startup:['runtime.js','client.js'],assets,provenance:{source_digest:`sha256:${sourceDigest()}`,sdk_digest:`sha256:${env.pin.archive.sha256}`,toolchain_digest:`sha256:${hash(JSON.stringify(env.pin.toolchain))}`},host_contract:'screen-records.v1',may:['records.call','records.slot'],tools:{},operations,navigation:{section_query:'waba',default_section:'inbox',sections:[{id:'inbox',label:'Inbox'},{id:'connection',label:'Settings'}]},views};
 const declaration=JSON.stringify(decl,null,2)+'\n';
 if(Buffer.byteLength(declaration)>16384)throw new Error('Screen declaration exceeds 16384 bytes');
 writeFileSync(join(out,'screens.json'),declaration);

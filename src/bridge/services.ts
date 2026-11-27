@@ -36,7 +36,7 @@ export interface CallArgs {
   "whatsapp.draft.discard": { conversation_id: string };
   // CAD-1651 (favcrm/cadence#1199): takeover. Set is an operator write; release is a host confirm card.
   "whatsapp.handoff.set": { conversation_id: string };
-  "screen.route.patch": { section?: Section; view?: "list" | "new"; record_id?: string | null; segment_id?: string | null; replace?: boolean };
+  "screen.route.patch": { section?: Section; view?: "list" | "new"; record_id?: string | null; segment_id?: string | null; params?: Record<string, string>; replace?: boolean };
 }
 export type Section = "connection" | "inbox";
 /** Q6: a segment or up to 1000 individual accounts; `all` and `csv` are not offered. */
@@ -68,7 +68,7 @@ export const CALL_FIELDS: Record<keyof CallArgs, readonly string[]> = {
   "whatsapp.broadcast.test.prepare": ["broadcast_id", "to"], "whatsapp.broadcast.prepare": ["broadcast_id", "send_at"],
   "chat.whatsapp.open": ["conversation_id"], "whatsapp.draft.show": ["conversation_id"], "whatsapp.draft.discard": ["conversation_id"],
   "whatsapp.handoff.set": ["conversation_id"],
-  "screen.route.patch": ["section", "view", "record_id", "segment_id", "replace"],
+  "screen.route.patch": ["section", "view", "record_id", "segment_id", "params", "replace"],
 };
 export const SLOT_FIELDS: Record<keyof SlotArgs, readonly string[]> = {
   "whatsapp.reply.send": ["conversation_id", "text", "effect_id", "reply_to_message_id"],

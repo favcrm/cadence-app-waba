@@ -16,18 +16,18 @@
     {
       "name": "client.js",
       "media_type": "text/javascript",
-      "size": 205727,
-      "sha256": "sha256:c43d84fb0d6d479f5c8436142c797f7d31820d7337b69a78638335a3bfcd5476"
+      "size": 208380,
+      "sha256": "sha256:19d7f418ba4d457349b55ea03963c9188a12193151e71271059252c70a8071b0"
     },
     {
       "name": "waba.css",
       "media_type": "text/css",
-      "size": 65909,
-      "sha256": "sha256:c5a01932b5dbdc91b1d45c1c3c8627f8c4a5f8b02133b030bda2c236519a4071"
+      "size": 66453,
+      "sha256": "sha256:89734ce0bf41ec885d0950278f3b5cd381999b6b54a12c97d5c366654d665809"
     }
   ],
   "provenance": {
-    "source_digest": "sha256:99a611df41e8c0d831091527d7f4dc72d68fb7bbeb2dfdd5ed933bb0ad4557c0",
+    "source_digest": "sha256:2a74f07984dd7fc95f02fb8e4008eceaa38fbb69b76ac9466480f733413f3fa7",
     "sdk_digest": "sha256:fd65c974511e63b3996e9fa7e438fb4e39df5f508d11636116ef150fcc123e35",
     "toolchain_digest": "sha256:e21cfc8222db408abe6ba5a482520639d9cf4b96481c19aff4b4246af8a65e42"
   },
@@ -86,5 +86,92 @@
         "label": "Settings"
       }
     ]
-  }
+  },
+  "views": [
+    {
+      "id": "conversation",
+      "label": {
+        "en": "Conversation",
+        "zh-TW": "對話"
+      },
+      "section": "inbox",
+      "params": {
+        "id": {
+          "type": "string",
+          "required": true
+        },
+        "provider": {
+          "type": "enum",
+          "values": [
+            "official",
+            "linked"
+          ],
+          "labels": {
+            "official": {
+              "en": "Official API",
+              "zh-TW": "官方 API"
+            },
+            "linked": {
+              "en": "Linked device",
+              "zh-TW": "已連結裝置"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "inbox",
+      "label": {
+        "en": "Inbox",
+        "zh-TW": "收件匣"
+      },
+      "section": "inbox",
+      "params": {
+        "filter": {
+          "type": "enum",
+          "values": [
+            "all",
+            "unread",
+            "needs_reply",
+            "due"
+          ],
+          "labels": {
+            "all": {
+              "en": "All",
+              "zh-TW": "全部"
+            },
+            "unread": {
+              "en": "Unread",
+              "zh-TW": "未讀"
+            },
+            "needs_reply": {
+              "en": "Needs reply",
+              "zh-TW": "待回覆"
+            },
+            "due": {
+              "en": "Follow-ups due",
+              "zh-TW": "待跟進"
+            }
+          }
+        },
+        "provider": {
+          "type": "enum",
+          "values": [
+            "official",
+            "linked"
+          ],
+          "labels": {
+            "official": {
+              "en": "Official API",
+              "zh-TW": "官方 API"
+            },
+            "linked": {
+              "en": "Linked device",
+              "zh-TW": "已連結裝置"
+            }
+          }
+        }
+      }
+    }
+  ]
 }
