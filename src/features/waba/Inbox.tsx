@@ -1137,14 +1137,21 @@ function Thread({ scope, id, initial, preview, initialUnread, inboxScope, work, 
     if (!pane) return;
     // Details hides the dock without retiring this nomination. Keep the list
     // extent through the zero inset and re-open so scrollTop cannot clamp.
+    // Reserve expected overlay clearance before the host's first inset arrives so the skeleton doesn't shift.
     if (replyInset === null) {
-      pane.removeAttribute("data-reply-overlay");
-      pane.style.removeProperty("--waba-reply-dock-height");
+      if (composeId !== null && channel.hostReplyOverlay && !details) {
+        const reserved = channel.lastReplyOverlayPx > 0 ? channel.lastReplyOverlayPx : 92;
+        pane.setAttribute("data-reply-overlay", "");
+        pane.style.setProperty("--waba-reply-dock-height", `${reserved}px`);
+      } else {
+        pane.removeAttribute("data-reply-overlay");
+        pane.style.removeProperty("--waba-reply-dock-height");
+      }
     } else if (replyInset.px > 0) {
       pane.setAttribute("data-reply-overlay", "");
       pane.style.setProperty("--waba-reply-dock-height", `${replyInset.px}px`);
     }
-  }, [replyInset]);
+  }, [composeId, details, replyInset]);
   useLayoutEffect(() => {
     const pane = timeline.current;
     const anchor = messages.state === "ok" && messages.value.previousAnchor;
@@ -1523,13 +1530,14 @@ function Thread({ scope, id, initial, preview, initialUnread, inboxScope, work, 
             onDiscard={() => { void discard(); }}
           />
         </div>}
-        {c && composeId === null && <footer className="waba-thread-footer">
+        {(c !== null || conversation.state === "loading") && composeId === null && <footer className="waba-thread-footer">
           {canReply ? !(linked && channel.hostCompose) && <Composer
             scope={scope}
-            conversationId={c.conversationId}
-            handoffAt={c.handoffAt}
-            freeformUntil={c.freeformUntil}
-            open={scope.provider === "linked" || windowOpen(c)}
+            conversationId={c?.conversationId ?? id}
+            handoffAt={c?.handoffAt ?? null}
+            freeformUntil={headerRow?.freeformUntil ?? null}
+            open={scope.provider === "linked" || (headerRow ? windowOpen(headerRow) : true)}
+            ready={c !== null}
             autoTakeover={handoff.set}
             inserted={null}
             draft={draft}
@@ -1542,14 +1550,14 @@ function Thread({ scope, id, initial, preview, initialUnread, inboxScope, work, 
             onBrief={runBrief}
             onDismissBriefNote={() => setBriefNote(null)}
             canTemplate={canTemplate}
-            onOpenTemplate={() => onRecipient(c)}
-            replyDirty={replyDirty}
+            onOpenTemplate={canTemplate ? () => { if (c) onRecipient(c); } : undefined}
+            replyDirty={replyDirty || !c}
             onSent={onSent}
             onChanged={reload}
             onDirtyChange={onReplyDirty}
           />
             : <Notice state="read-only">{zh ? "你可以閱讀此收件匣。只有工作區擁有人可以回覆。" : "You can read this inbox. Only the workspace operator can reply."}</Notice>}
-          {!canReply && canTemplate && <Button size="sm" disabled={replyDirty} onClick={() => onRecipient(c)}>{zh ? "使用已核准的範本…" : "Send an approved template…"}</Button>}
+          {!canReply && canTemplate && <Button size="sm" disabled={replyDirty || !c} onClick={() => { if (c) onRecipient(c); }}>{zh ? "使用已核准的範本…" : "Send an approved template…"}</Button>}
         </footer>}
       </div>
     </div>
@@ -2267,6 +2275,7 @@ function Composer({
   handoffAt,
   freeformUntil,
   open,
+  ready = true,
   autoTakeover,
   inserted,
   draft,
@@ -2290,6 +2299,7 @@ function Composer({
   handoffAt: string | null;
   freeformUntil: string | null;
   open: boolean;
+  ready?: boolean;
   autoTakeover: boolean;
   inserted: { text: string; n: number } | null;
   draft?: Draft | null;
@@ -2387,7 +2397,7 @@ function Composer({
   }
   async function send() {
     const frozen = text;
-    if (!frozen.trim() || submitting.current) return;
+    if (!ready || !frozen.trim() || submitting.current) return;
     submitting.current = true;
     setBusy(true); setError(null); setAttempt(null);
     try {
@@ -2446,7 +2456,7 @@ function Composer({
       {briefNote.text}
       {onDismissBriefNote && <> <button type="button" className="waba-active-reset" onClick={onDismissBriefNote}>{zh ? "關閉" : "Dismiss"}</button></>}
     </p>}
-    <form className="waba-compose-box" data-ghost={showGhost ? "yes" : undefined} onSubmit={e => { e.preventDefault(); if (open && !locked) void send(); }}>
+    <form className="waba-compose-box" data-ghost={showGhost ? "yes" : undefined} onSubmit={e => { e.preventDefault(); if (open && ready && !locked) void send(); }}>
       <div className="waba-compose-stage">
         {showGhost && (
           <div className="waba-ghost-text" aria-hidden="true">
@@ -2475,7 +2485,7 @@ function Composer({
             }
             if (e.key !== "Enter" || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing || e.keyCode === 229) return;
             e.preventDefault();
-            if (!e.repeat && !busy && !locked) void send();
+            if (!e.repeat && ready && !busy && !locked) void send();
           }}
         />
       </div>
@@ -2490,7 +2500,7 @@ function Composer({
               aria-expanded={plusOpen}
               aria-label={zh ? "更多輸入工具" : "More composer tools"}
               title={zh ? "範本及助理工具" : "Templates & AI tools"}
-              disabled={busy || locked}
+              disabled={!ready || busy || locked}
               onClick={() => { setPlusOpen(v => !v); setBriefPromptOpen(false); }}
             >
               <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6" /></svg>
@@ -2532,7 +2542,7 @@ function Composer({
           {canBrief && onBrief && !showGhost && <button
             type="button"
             className="waba-compose-ai-btn"
-            disabled={busy || locked || briefBusy}
+            disabled={!ready || busy || locked || briefBusy}
             title={zh ? "AI 起草回覆" : "Draft with AI"}
             aria-label={zh ? "AI 起草回覆" : "Draft with AI"}
             onClick={() => { void onBrief(""); }}
@@ -2550,7 +2560,7 @@ function Composer({
           {text && !busy && !locked && <Button size="sm" variant="ghost" onClick={() => { setText(""); input.current?.focus(); }}>{zh ? "清除" : "Clear"}</Button>}
         </div>
         <span className="waba-compose-hint waba-muted">{showGhost ? (zh ? "Tab 套用 · 直接輸入覆蓋" : "Tab to accept · Type to override") : (zh ? "Enter 檢查回覆 · Shift+Enter 換行" : "Enter to review · Shift+Enter for new line")}{freeformUntil && scope.provider !== "linked" ? ` · ${when(freeformUntil)}` : ""}</span>
-        <button className="waba-compose-send" type="submit" aria-label={review} title={review} disabled={busy || locked || !text.trim()}>
+        <button className="waba-compose-send" type="submit" aria-label={review} title={review} disabled={!ready || busy || locked || !text.trim()}>
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6" /></svg>
         </button>
       </div>

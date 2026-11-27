@@ -816,6 +816,21 @@ class SkillsPackagingTests(unittest.TestCase):
             self.assertNotIn("favcrm_company_id", text)
         self.assertIn("canvas_open", (REPO / "app" / "skills" / "whatsapp-ops" / "SKILL.md").read_text(encoding="utf-8"))
 
+    def test_waba_borderless_messages_composer_and_no_shift_skeleton(self):
+        import re
+        css = (REPO / "app" / "screens" / "waba" / "waba.css").read_text(encoding="utf-8")
+        for selector in (
+            r"\.waba-message\[data-direction=\"?outbound\"?\]",
+            r"\.waba-skeleton-bubble\[data-direction=\"?outbound\"?\]",
+        ):
+            m = re.search(selector + r"\s*\{([^}]*)\}", css)
+            self.assertIsNotNone(m, msg=f"Missing rule for {selector}")
+            self.assertNotRegex(m.group(1), r"(?<![a-z-])border(?:-color)?\s*:")
+        compose_m = re.search(r"\.waba-compose-box\s*\{([^}]*)\}", css)
+        self.assertIsNotNone(compose_m)
+        self.assertNotIn("1px solid", compose_m.group(1))
+        self.assertIn("border:0", compose_m.group(1).replace(" ", ""))
+
 
 if __name__ == "__main__":
     unittest.main()
