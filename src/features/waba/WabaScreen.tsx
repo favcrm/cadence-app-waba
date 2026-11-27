@@ -6,7 +6,7 @@ import Broadcasts from "./Broadcasts";
 import AiAgent from "./AiAgent";
 import Connection from "./Connection";
 import { readPreferences,savePreferences,type Preferences,type Provider,type SavedPreferences } from "./preferences";
-import Inbox from "./Inbox";
+import Inbox, { type InboxQueue } from "./Inbox";
 import Templates,{ type Recipient } from "./Templates";
 import "./waba.css";
 
@@ -50,6 +50,10 @@ export default function WabaScreen() {
   const saveInProgress = useRef(false);
   const [pick, setPick] = useState<Provider | null>(null);
   const provider = saved?.profile.provider;
+  const routeProvider = snapshot?.route.params?.provider === "official" || snapshot?.route.params?.provider === "linked"
+    ? snapshot.route.params.provider
+    : undefined;
+  const effectiveProvider = routeProvider ?? provider;
   const [frameDirty, setReplyDirty] = useState(false);
   const hostDirty = useHostDirty();
   const replyDirty = frameDirty || hostDirty;
@@ -57,7 +61,7 @@ export default function WabaScreen() {
   // their reads on this stable one, so a push never resets loaded data or forms.
   const installId = snapshot?.scope.installId, digest = snapshot?.digest;
   const installScope = useMemo(() => installId === undefined || digest === undefined ? null : { installId, digest }, [installId, digest]);
-  const scope = useMemo(() => installScope && provider ? { ...installScope, ...(provider === "linked" ? { provider: "linked" as const } : {}) } : null, [installScope, provider]);
+  const scope = useMemo(() => installScope && effectiveProvider ? { ...installScope, ...(effectiveProvider === "linked" ? { provider: "linked" as const } : {}) } : null, [installScope, effectiveProvider]);
   const [readVersion, setReadVersion] = useState(0);
   const refresh = useCallback(() => { setSaveError(null); setReadVersion(n => n + 1); }, []);
   const section = snapshot?.route.section;
@@ -147,12 +151,12 @@ export default function WabaScreen() {
     document.getElementById(tool ? `waba-${tool}-title` : "waba-tools-trigger")?.focus({ preventScroll: true });
   }, [section, tool]);
   useEffect(() => {
-    if (section !== "inbox" || provider !== "official") {
+    if (section !== "inbox" || effectiveProvider !== "official") {
       setTool(null);
       setLocalInboxId(null);
     }
-    if (provider !== "official") setRecipient(null);
-  }, [section, provider]);
+    if (effectiveProvider !== "official") setRecipient(null);
+  }, [section, effectiveProvider]);
   if (!snapshot || !installScope) return scopeError() ? <ErrorNotice>{scopeError()}</ErrorNotice> : <Loading>Waiting for the verified WhatsApp mount…</Loading>;
   const { route, actions } = snapshot;
   const zh = snapshot.presentationLocale === "zh-TW";
@@ -162,7 +166,7 @@ export default function WabaScreen() {
     catch (e) { routeFocus.current = null; throw e; }
   }
   function openTool(next: Tool, to?: Recipient) {
-    if (provider !== "official" || replyDirty) return;
+    if (effectiveProvider !== "official" || replyDirty) return;
     if (to) setRecipient(to);
     setToolError(false);
     toolFocus.current = true;
@@ -199,7 +203,7 @@ export default function WabaScreen() {
       setSaving(false);
     }
   }
-  const linked = provider === "linked";
+  const linked = effectiveProvider === "linked";
   const viewer = { canConnect: can("whatsapp.connect_session"), canReply: can("whatsapp.reply.prepare", "whatsapp.reply.send"), canTemplate: !linked && can("whatsapp.template.prepare", "whatsapp.template.send") };
   const rights = { draft: can("whatsapp.broadcast.draft"), estimate: can("whatsapp.broadcast.estimate"), test: can("whatsapp.broadcast.test.prepare", "whatsapp.broadcast.test.send"), send: can("whatsapp.broadcast.prepare", "whatsapp.broadcast.send"), stop: can("whatsapp.broadcast.stop") };
   const mode = saved?.profile.reply_mode ?? "copilot";
@@ -209,6 +213,10 @@ export default function WabaScreen() {
   const copilot = !linked && showDrafts;
   const handoff = { set: !linked && can("whatsapp.handoff.set"), release: !linked && can("whatsapp.handoff.release") };
   const assist = { show: showDrafts, brief: copilot && can("chat.whatsapp.brief"), open: copilot && can("chat.whatsapp.open"), discard: showDrafts && can("whatsapp.draft.discard") };
+  const routeParamId = route.params?.id?.trim() || null;
+  const rawFilter = route.params?.filter;
+  const routeParamFilter: InboxQueue | null = rawFilter === "all" || rawFilter === "unread" || rawFilter === "needs_reply" || rawFilter === "due" ? rawFilter : null;
+  const hasRouteParams = !!(route.params && Object.keys(route.params).length > 0);
   const settings = route.section === "connection";
   const chosen = pick ?? provider;
   const saveNotice = saveError === "owner"
@@ -240,13 +248,13 @@ export default function WabaScreen() {
       {linked && <Notice>{zh ? "只供測試帳戶使用。服務異常中止時，可能會遺失傳入訊息。" : "Test accounts only. Incoming messages can be lost after a crash."}</Notice>}
       {scope && <Connection key={provider} scope={scope} canConnect={viewer.canConnect} />}
     </div> : !scope ? <EmptyState name="connection" title={zh ? "選擇 WhatsApp 連線" : "Choose a WhatsApp connection"}>{zh ? "請由工作區擁有人在設定中選取連線。" : "A workspace owner needs to choose a connection in Settings."} <Button size="sm" onClick={() => { setReturnError(false); void go("connection").catch(() => setReturnError(true)); }}>{zh ? "開啟設定" : "Open Settings"}</Button>{returnError && <p>{zh ? "請在側欄選取設定。" : "Choose Settings in the sidebar."}</p>}</EmptyState>
-      : provider === "official" && tool ? <div className="waba-tool-page">
+      : effectiveProvider === "official" && tool ? <div className="waba-tool-page">
         <Button size="sm" variant="ghost" onClick={() => { void closeTool(); }}>{zh ? "返回收件匣" : "Back to Inbox"}</Button>
         {toolError && <ErrorNotice bare>{zh ? "無法開啟對話。" : "Couldn’t open the conversation."}</ErrorNotice>}
         {tool === "templates" ? <Templates scope={scope} canSend={viewer.canTemplate} recipient={recipient} onRecipient={setRecipient} openConversation={id => { void closeTool(id); }} />
           : tool === "broadcasts" ? <Broadcasts scope={scope} rights={rights} />
           : <>{saveNotice}<AiAgent mode={mode} editable={canEdit && !replyDirty && !saveError} busy={saving} onMode={reply_mode => { void apply({ provider: "official", reply_mode }); }} /></>}
       </div>
-      : <Inbox key={provider} scope={scope} canReply={viewer.canReply} canTemplate={viewer.canTemplate} assist={assist} handoff={handoff} routeId={linked ? null : route.record_id} initialId={localInboxId} onRecipient={to => openTool("templates", to)} replyDirty={replyDirty} onDirtyChange={setReplyDirty} openSettings={() => go("connection")} tools={provider === "official" ? <ToolsMenu zh={zh} disabled={replyDirty} choose={openTool} /> : null} />}
+      : <Inbox key={effectiveProvider} scope={scope} canReply={viewer.canReply} canTemplate={viewer.canTemplate} assist={assist} handoff={handoff} routeId={linked ? null : route.record_id} initialId={localInboxId} routeParamId={routeParamId} initialFilter={routeParamFilter} hasRouteParams={hasRouteParams} onRecipient={to => openTool("templates", to)} replyDirty={replyDirty} onDirtyChange={setReplyDirty} openSettings={() => go("connection")} tools={effectiveProvider === "official" ? <ToolsMenu zh={zh} disabled={replyDirty} choose={openTool} /> : null} />}
   </main>;
 }

@@ -10,7 +10,7 @@ const exact = (value, required, optional = []) => {
 const decoder = new TextDecoder('utf-8',{fatal:true});
 const out = safePath(root,'app/screens/waba');
 const decl = parseJson(decoder.decode(readFileSync(safePath(out,'screens.json'))),16384);
-exact(decl,['contract','app','entry','assets','provenance','may','host_contract','tools','operations','navigation'],['remote_images','startup']);
+exact(decl,['contract','app','entry','assets','provenance','may','host_contract','tools','operations','navigation'],['remote_images','startup','views']);
 if (decl.contract !== 'app-screens/v2' || decl.app !== 'waba' || decl.entry !== 'client.js' || decl.host_contract !== 'screen-records.v1') fail('WhatsApp screen contract mismatch');
 if (JSON.stringify(decl.may) !== JSON.stringify(['records.call','records.slot']) || Object.keys(decl.tools ?? {}).length || !decl.tools || Array.isArray(decl.tools) || typeof decl.tools !== 'object' || (decl.remote_images !== undefined && JSON.stringify(decl.remote_images) !== '[]')) fail('Unexpected bridge authority');
 if (JSON.stringify(decl.operations) !== JSON.stringify(operationInventory())) fail('Operations differ from the source inventory');
@@ -20,6 +20,27 @@ if (Object.keys(expected).some(k => decl.provenance[k] !== expected[k])) fail('S
 exact(decl.navigation,['section_query','default_section','sections']);
 const navigation={section_query:'waba',default_section:'inbox',sections:[{id:'inbox',label:'Inbox'},{id:'connection',label:'Settings'}]};
 if (JSON.stringify(decl.navigation) !== JSON.stringify(navigation)) fail('WhatsApp navigation mismatch');
+const views=[
+  {
+    id:'conversation',
+    label:{en:'Conversation','zh-TW':'對話'},
+    section:'inbox',
+    params:{
+      id:{type:'string',required:true},
+      provider:{type:'enum',values:['official','linked'],labels:{official:{en:'Official API','zh-TW':'官方 API'},linked:{en:'Linked device','zh-TW':'已連結裝置'}}},
+    },
+  },
+  {
+    id:'inbox',
+    label:{en:'Inbox','zh-TW':'收件匣'},
+    section:'inbox',
+    params:{
+      filter:{type:'enum',values:['all','unread','needs_reply','due'],labels:{all:{en:'All','zh-TW':'全部'},unread:{en:'Unread','zh-TW':'未讀'},needs_reply:{en:'Needs reply','zh-TW':'待回覆'},due:{en:'Follow-ups due','zh-TW':'待跟進'}}},
+      provider:{type:'enum',values:['official','linked'],labels:{official:{en:'Official API','zh-TW':'官方 API'},linked:{en:'Linked device','zh-TW':'已連結裝置'}}},
+    },
+  },
+];
+if (JSON.stringify(decl.views) !== JSON.stringify(views)) fail('WhatsApp views mismatch');
 const media={js:'text/javascript',css:'text/css',svg:'image/svg+xml',json:'application/json'};
 if (!Array.isArray(decl.assets) || !decl.assets.length || decl.assets.length > 32) fail('Asset count exceeds bounds');
 let total=0; const names=new Set();

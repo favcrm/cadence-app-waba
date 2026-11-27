@@ -293,6 +293,12 @@ export function windowOpen(c: Pick<ConversationRow, "replyMode" | "freeformUntil
   const until = c.freeformUntil ? Date.parse(c.freeformUntil) : NaN;
   return Number.isNaN(until) || until > now;
 }
+export function isPdfMedia(media: Pick<LinkedMediaInfo, "kind" | "mimeType" | "fileName">): boolean {
+  return media.kind === "document" && (
+    media.mimeType?.toLowerCase().split(";")[0] === "application/pdf" ||
+    (!media.mimeType && !!media.fileName?.toLowerCase().endsWith(".pdf"))
+  );
+}
 export function when(v: string | null): string {
   if (!v) return "—";
   const t = Date.parse(v);

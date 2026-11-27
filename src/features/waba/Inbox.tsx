@@ -9,7 +9,7 @@ import { dueLabel,effectiveThreadState,listThreadWork,saveThreadWork,validWorkRe
 import { useWorkBrowse } from "./useWorkBrowse";
 import { useLivePoll } from "./useLivePoll";
 import type { Recipient } from "./Templates";
-import { declinedReason,errorText,formatConversationPreviewText,formatMediaBytes,formatMediaDuration,mediaAspectRatio,mediaBadge,mediaExtTone,mediaKindLabel,mediaMetaSummary,parseConversation,parseConversations,parseDraft,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Draft,type LinkedMediaInfo,type Message,type ReplyState,type ReplyStatus } from "./door";
+import { declinedReason,errorText,formatConversationPreviewText,formatMediaBytes,formatMediaDuration,isPdfMedia,mediaAspectRatio,mediaBadge,mediaExtTone,mediaKindLabel,mediaMetaSummary,parseConversation,parseConversations,parseDraft,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Draft,type LinkedMediaInfo,type Message,type ReplyState,type ReplyStatus } from "./door";
 
 const PAGE = 25;
 /** What the copilot may show, derived from the host-granted actions (members get the draft read-only). */
@@ -167,6 +167,7 @@ async function readWhileIndexing<T>(
 }
 
 type Queue = "all" | "unread" | ThreadState | "due";
+export type InboxQueue = Queue;
 const crmQueues: readonly (ThreadState | "due")[] = ["needs_reply", "due", "waiting", "done"];
 type WorkIndex = { records: Map<string, ThreadWork>; checked: Set<string> };
 const emptyWorkIndex = (): WorkIndex => ({ records: new Map(), checked: new Set() });
@@ -174,7 +175,7 @@ function calendarDay(now: Date) {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
 
-export default function Inbox({ scope, canReply, canTemplate, assist, handoff, routeId: routed, initialId, onRecipient, replyDirty, onDirtyChange, openSettings, tools }: { scope: DisplayScope; canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; routeId: string | null; initialId: string | null; onRecipient: (r: Recipient) => void; replyDirty: boolean; onDirtyChange: (dirty: boolean) => void; openSettings: () => Promise<unknown>; tools: ReactNode }) {
+export default function Inbox({ scope, canReply, canTemplate, assist, handoff, routeId: routed, initialId, routeParamId, initialFilter, hasRouteParams = false, onRecipient, replyDirty, onDirtyChange, openSettings, tools }: { scope: DisplayScope; canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; routeId: string | null; initialId: string | null; routeParamId: string | null; initialFilter: Queue | null; hasRouteParams?: boolean; onRecipient: (r: Recipient) => void; replyDirty: boolean; onDirtyChange: (dirty: boolean) => void; openSettings: () => Promise<unknown>; tools: ReactNode }) {
   const zh = useScope()?.presentationLocale === "zh-TW", locale = zh ? "zh" : "en";
   const linked = scope.provider === "linked";
   const provider: "linked" | "official" = linked ? "linked" : "official";
@@ -185,7 +186,7 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
   const listRequest = useRef(0);
   const foregroundList = useRef(false);
   const [filter, setFilter] = useState("");
-  const [queue, setQueue] = useState<Queue>("all");
+  const [queue, setQueue] = useState<Queue>(() => initialFilter ?? "all");
   const [inboxScope, setInboxScope] = useState<string | null>(null);
   const liveInbox = useRef<string | null>(null);
   const [work, setWork] = useState(emptyWorkIndex);
@@ -197,8 +198,9 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
       return { records: new Map(previous.records).set(record.ref, record), checked: new Set(previous.checked).add(record.ref) };
     });
   }, []);
-  // Ids outside the host route grammar stay a local selection.
-  const [local, setLocal] = useState(initialId);
+  // Ids outside the host route grammar (or opened via route.params.id) stay in local selection.
+  const [local, setLocal] = useState(() => routeParamId ?? initialId);
+  const [focusedThread, setFocusedThread] = useState(() => routeParamId !== null);
   const [resolved, setResolved] = useState<Conversation | null>(null);
   const [opening, setOpening] = useState(false);
   const [openError, setOpenError] = useState(false);
@@ -369,11 +371,41 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
       clearUnread(id, observed !== null ? countBeforeOpen > 0 : existing === undefined);
     } else {
       setOpenedUnread({ id: "", count: 0 });
+      setFocusedThread(false);
     }
-    if (scope.provider === "linked") { setLocal(id); return; }
-    if (id === null || routable(id)) { setLocal(null); void patchRoute({ section: "inbox", view: "list", record_id: id }).catch(() => undefined); }
-    else { setLocal(id); void patchRoute({ section: "inbox", view: "list", record_id: null }).catch(() => undefined); }
-  }, [clearUnread, scope.provider]);
+    const clearParams = id === null && (hasRouteParams || routeParamId !== null);
+    if (scope.provider === "linked") {
+      setLocal(id);
+      if (clearParams) void patchRoute({ section: "inbox", view: "list", record_id: null, params: {} }).catch(() => undefined);
+      return;
+    }
+    if (id === null || routable(id)) {
+      setLocal(null);
+      void patchRoute({ section: "inbox", view: "list", record_id: id, ...(clearParams ? { params: {} } : {}) }).catch(() => undefined);
+    } else {
+      setLocal(id);
+      void patchRoute({ section: "inbox", view: "list", record_id: null }).catch(() => undefined);
+    }
+  }, [clearUnread, hasRouteParams, routeParamId, scope.provider]);
+  const prevRouteParamId = useRef(routeParamId);
+  useEffect(() => {
+    if (prevRouteParamId.current === routeParamId) return;
+    prevRouteParamId.current = routeParamId;
+    if (routeParamId === null) {
+      setFocusedThread(false);
+      return;
+    }
+    setFocusedThread(true);
+    setResolved(null);
+    setLocal(routeParamId);
+    setOpenError(false);
+  }, [routeParamId]);
+  const prevInitialFilter = useRef(initialFilter);
+  useEffect(() => {
+    if (prevInitialFilter.current === initialFilter) return;
+    prevInitialFilter.current = initialFilter;
+    if (initialFilter !== null) setQueue(initialFilter);
+  }, [initialFilter]);
   useEffect(() => {
     return channel.subscribeOpenThread(conversationId => {
       if (replyDirty) return;
@@ -419,8 +451,8 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
   const recordFor = (row: ConversationRow) => row.work && inboxScope && validWorkRef(row.work.ref, inboxScope) ? work.records.get(row.work.ref) : undefined;
   const canFilterUnread = rows.some(row => row.unreadCount !== null);
   useLayoutEffect(() => {
-    if (!canFilterUnread && queue === "unread") setQueue("all");
-  }, [canFilterUnread, queue]);
+    if (list === "ok" && !canFilterUnread && queue === "unread") setQueue("all");
+  }, [list, canFilterUnread, queue]);
   const unreadCount = rows.filter(row => (row.unreadCount ?? 0) > 0).length;
   const selectedRow = selected ? rows.find(r => r.conversationId === selected) ?? null : null;
   const shown = queue === "due" ? [] : rows.filter(r => {
@@ -489,7 +521,8 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
   const visibleCount = queue === "due" ? extras.length : shown.length + extras.length;
   const failed = list === "failed";
   const browseLabel = queue === "due" ? (zh ? "查找跟進事項…" : "Finding follow-ups…") : (zh ? "搜尋已儲存名稱…" : "Searching saved names…");
-  return <section className="waba-page waba-inbox" data-selected={newMessage || selected ? "yes" : "no"} aria-label={zh ? "收件匣" : "Inbox"}>
+  const isFocusedMode = focusedThread && selected !== null && !newMessage;
+  return <section className="waba-page waba-inbox" data-selected={newMessage || selected ? "yes" : "no"} data-focused-thread={isFocusedMode ? "yes" : "no"} aria-label={zh ? "收件匣" : "Inbox"}>
     <div className="waba-list" aria-labelledby="waba-inbox-title">
       <header className="waba-list-head">
         <div className="waba-head">
@@ -604,7 +637,7 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
     </div>
     <div ref={thread} className="waba-thread">
       {newMessage ? <NewLinkedReply scope={scope} dirty={replyDirty} onDirtyChange={onDirtyChange} onBack={() => select(null)} onChanged={() => { void page(null, true); }} />
-        : selected ? <Thread key={selected} scope={scope} id={selected} initial={resolved} preview={selectedRow} initialUnread={openedUnread.id === selected ? openedUnread.count : 0} inboxScope={inboxScope} work={work} onWork={remember} onMarkUnread={markUnread} onAutoClearUnread={id => { if (!manuallyMarkedUnread.current.has(id)) clearUnread(id, false); }} onAtBottomChange={atBottom => { threadAtBottom.current = atBottom; }} canReply={canReply} canTemplate={canTemplate} assist={assist} handoff={handoff} onRecipient={onRecipient} onDirtyChange={onDirtyChange} onBack={() => select(null)} replyDirty={replyDirty} />
+        : selected ? <Thread key={selected} scope={scope} id={selected} initial={resolved} preview={selectedRow} initialUnread={openedUnread.id === selected ? openedUnread.count : 0} inboxScope={inboxScope} work={work} onWork={remember} onMarkUnread={markUnread} onAutoClearUnread={id => { if (!manuallyMarkedUnread.current.has(id)) clearUnread(id, false); }} onAtBottomChange={atBottom => { threadAtBottom.current = atBottom; }} canReply={canReply} canTemplate={canTemplate} assist={assist} handoff={handoff} focusedMode={isFocusedMode} onRecipient={onRecipient} onDirtyChange={onDirtyChange} onBack={() => select(null)} replyDirty={replyDirty} />
         : <div className="waba-thread-empty">
             <p><strong>{zh ? "選擇對話" : "Select a conversation"}</strong></p>
             <p className="waba-muted">{zh ? "打開對話以查看記錄及回覆。" : "Open a conversation to read and reply."}</p>
@@ -670,10 +703,10 @@ function ThreadSkeleton({ indexing, zh }: { indexing: boolean; zh: boolean }) {
   </div>;
 }
 
-function Thread({ scope, id, initial, preview, initialUnread, inboxScope, work, onWork, onMarkUnread, onAutoClearUnread, onAtBottomChange, canReply, canTemplate, assist, handoff, onRecipient, onDirtyChange, onBack, replyDirty }: {
+function Thread({ scope, id, initial, preview, initialUnread, inboxScope, work, onWork, onMarkUnread, onAutoClearUnread, onAtBottomChange, canReply, canTemplate, assist, handoff, focusedMode = false, onRecipient, onDirtyChange, onBack, replyDirty }: {
   scope: DisplayScope; id: string; initial: Conversation | null; preview: ConversationRow | null; initialUnread: number; inboxScope: string | null; work: WorkIndex; onWork: (record: ThreadWork) => void;
   onMarkUnread: (conversationId: string) => void; onAutoClearUnread: (conversationId: string) => void; onAtBottomChange: (atBottom: boolean) => void;
-  canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; onRecipient: (r: Recipient) => void;
+  canReply: boolean; canTemplate: boolean; assist: Assist; handoff: Handoff; focusedMode?: boolean; onRecipient: (r: Recipient) => void;
   onDirtyChange: (dirty: boolean) => void; onBack: () => void; replyDirty: boolean;
 }) {
   const zh = useScope()?.presentationLocale === "zh-TW";
@@ -1248,7 +1281,7 @@ function Thread({ scope, id, initial, preview, initialUnread, inboxScope, work, 
     }
   }}>
     <header className="waba-thread-head">
-      <Button size="sm" variant="ghost" className="waba-back" disabled={replyDirty} onClick={onBack}>{zh ? "返回" : "Back"}</Button>
+      <Button size="sm" variant="ghost" className="waba-back" disabled={replyDirty} onClick={onBack}>{focusedMode ? (zh ? "收件匣" : "Inbox") : (zh ? "返回" : "Back")}</Button>
       <h2 id="waba-thread-title" tabIndex={-1}>
         {headerRow ? <button className="waba-details-trigger" ref={detailsButton} type="button" disabled={!c} aria-haspopup="dialog" aria-expanded={details} aria-label={`${identity}${zh ? "：" : ": "}${detailsLabel}`} onClick={() => details ? closeDetails() : setDetails(true)}>
           <Avatar name={title} phone={phone} group={group} />
@@ -1927,13 +1960,26 @@ function LinkedMediaMessage({
   }
 
   const docMeta = [formatMediaBytes(media.byteLength), mediaBadge(media)].filter(Boolean).join(" · ");
+  const canPreviewPdf = isPdfMedia(media) && media.available && channel.hostPdfPreview;
+  const docContent = <>
+    <span className="waba-doc-badge" data-ext={mediaExtTone(media)}>{mediaBadge(media)}</span>
+    <span className="waba-doc-meta">
+      <span className="waba-doc-name" title={label}>{label}</span>
+      {docMeta && <span className="waba-doc-sub">{docMeta}</span>}
+    </span>
+  </>;
   return <div className="waba-media-card">
     <div className="waba-doc-card">
-      <span className="waba-doc-badge" data-ext={mediaExtTone(media)}>{mediaBadge(media)}</span>
-      <span className="waba-doc-meta">
-        <span className="waba-doc-name" title={label}>{label}</span>
-        {docMeta && <span className="waba-doc-sub">{docMeta}</span>}
-      </span>
+      {canPreviewPdf ? (
+        <button
+          type="button"
+          className="waba-doc-open"
+          aria-label={zh ? `檢視 PDF：${label}` : `Preview PDF: ${label}`}
+          onClick={() => channel.previewPdf(conversationId, message.id, provider)}
+        >
+          {docContent}
+        </button>
+      ) : docContent}
       <button
         type="button"
         className="waba-media-icon-btn"

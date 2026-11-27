@@ -90,6 +90,7 @@ class Channel {
   private replyLayoutSupported = false;
   private replyOverlaySupported = false;
   private mediaDownloadSupported = false;
+  private pdfPreviewSupported = false;
   private uxSupported = false;
   private drafts: Record<string, string> = EMPTY_DRAFTS;
   private draftListeners = new Set<() => void>();
@@ -176,6 +177,18 @@ class Channel {
     });
   }
   get hostMediaDownload(): boolean { return this.mediaDownloadSupported && !this.retired; }
+  get hostPdfPreview(): boolean { return this.pdfPreviewSupported && !this.retired; }
+  previewPdf(conversationId: string, messageId: string, provider?: "linked" | "official"): void {
+    if (!this.port || this.retired || !this.pdfPreviewSupported) return;
+    if (!printableBounded(conversationId, 256) || !printableBounded(messageId, 256)) return;
+    this.port.postMessage({
+      v: 2,
+      op: "whatsapp-pdf-preview",
+      conversation_id: conversationId,
+      message_id: messageId,
+      ...(provider === "official" ? { provider: "official" } : {}),
+    });
+  }
   downloadMedia(conversationId: string, messageId: string, provider?: "linked" | "official"): Promise<DownloadedWhatsAppMedia> {
     return this.requestMedia("inline", conversationId, messageId, provider);
   }
@@ -237,13 +250,24 @@ class Channel {
     this.replyLayoutSupported = this.replyAvailabilitySupported && new URLSearchParams(window.location.search).get("wa_compose_layout") === "1";
     this.replyOverlaySupported = this.replyLayoutSupported && new URLSearchParams(window.location.search).get("wa_compose_inset_ack") === "1";
     this.mediaDownloadSupported = new URLSearchParams(window.location.search).get("wa_media_download") === "1";
+    this.pdfPreviewSupported = new URLSearchParams(window.location.search).get("wa_pdf_preview") === "1";
     this.uxSupported = new URLSearchParams(window.location.search).get("wa_ux") === "1";
-    pair.port1.postMessage({ v: 1, op: "ready", accepts: ["screen.v2", "screen-records.v1", "screen-locale.v1",
+    const accepts = [
+      "screen.v2",
+      "screen-records.v1",
+      "screen-locale.v1",
       ...(this.composeSupported ? ["screen-whatsapp-compose.v1"] : []),
       ...(this.replyAvailabilitySupported ? ["screen-whatsapp-reply-availability.v1"] : []),
       ...(this.replyLayoutSupported ? [this.replyOverlaySupported ? "screen-whatsapp-reply-layout.v2" : "screen-whatsapp-reply-layout.v1"] : []),
       ...(this.mediaDownloadSupported ? ["screen-whatsapp-media.v1"] : []),
-      ...(this.uxSupported ? ["screen-whatsapp-ux.v1"] : [])] });
+      ...(this.pdfPreviewSupported ? ["screen-whatsapp-pdf-preview.v1"] : []),
+      ...(this.uxSupported ? ["screen-whatsapp-ux.v1"] : []),
+    ];
+    // Stay within the legacy 8-token accepts cap on older hosts while always enabling route params on read-only Canvas or CAD-2883+ hosts.
+    if (this.pdfPreviewSupported || accepts.length < 8) {
+      accepts.splice(3, 0, "screen-route-params.v1");
+    }
+    pair.port1.postMessage({ v: 1, op: "ready", accepts });
     window.addEventListener("pagehide", () => this.retire(new ApiError("WhatsApp mount retired", 403)), { once: true });
   }
   request(kind: "call" | "slot", verb: string, args: Record<string, unknown>): Promise<unknown> {

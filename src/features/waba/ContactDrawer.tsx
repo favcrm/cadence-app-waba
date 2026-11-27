@@ -2,7 +2,7 @@ import { Button, Detail, ErrorNotice, Field, Loading, Select, type DrawerEdit } 
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { channel } from "../../bridge/channel";
 import type { DisplayScope } from "../../bridge/scope";
-import { errorText, formatMediaBytes, formatMediaDuration, mediaBadge, mediaExtTone, mediaKindLabel, when, type Conversation, type Message, type WorkLink } from "./door";
+import { errorText, formatMediaBytes, formatMediaDuration, isPdfMedia, mediaBadge, mediaExtTone, mediaKindLabel, when, type Conversation, type Message, type WorkLink } from "./door";
 import FrameDrawer from "./FrameDrawer";
 import {
   addThreadNote,
@@ -419,12 +419,25 @@ export default function ContactDrawer({
         const sub = [dur, bytes, !media.available ? (zh ? "無法提供" : "Unavailable") : null].filter(Boolean).join(" · ");
         const isSaving = savingMediaId === m.id;
         const isSaved = savedMediaIds.has(m.id);
-        return <li key={m.id} className="waba-doc-card">
+        const canPreviewPdf = isPdfMedia(media) && media.available && channel.hostPdfPreview;
+        const docContent = <>
           <span className="waba-doc-badge" data-ext={mediaExtTone(media)}>{mediaBadge(media)}</span>
           <span className="waba-doc-meta">
             <span className="waba-doc-name" title={label}>{label}</span>
             {sub && <span className="waba-doc-sub">{sub}</span>}
           </span>
+        </>;
+        return <li key={m.id} className="waba-doc-card">
+          {canPreviewPdf ? (
+            <button
+              type="button"
+              className="waba-doc-open"
+              aria-label={zh ? `檢視 PDF：${label}` : `Preview PDF: ${label}`}
+              onClick={() => channel.previewPdf(conversationId, m.id, scope.provider === "linked" ? "linked" : "official")}
+            >
+              {docContent}
+            </button>
+          ) : docContent}
           {media.available && hostMediaDownload && (
             <button
               type="button"

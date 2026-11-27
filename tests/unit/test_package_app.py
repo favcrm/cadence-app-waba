@@ -798,5 +798,24 @@ class SkillsPackagingTests(unittest.TestCase):
             pkg.read_contents(bundle, pkg.bundle_files(bundle))
 
 
+    def test_waba_canvas_views_and_clean_ops_docs(self):
+        decl = json.loads((REPO / "app" / "screens" / "waba" / "screens.json").read_text(encoding="utf-8"))
+        views = decl.get("views")
+        self.assertIsInstance(views, list)
+        by_id = {v["id"]: v for v in views}
+        self.assertEqual(set(by_id), {"conversation", "inbox"})
+        self.assertEqual(by_id["conversation"]["section"], "inbox")
+        self.assertTrue(by_id["conversation"]["params"]["id"].get("required"))
+        self.assertEqual(by_id["conversation"]["params"]["provider"]["values"], ["official", "linked"])
+        self.assertEqual(by_id["inbox"]["params"]["filter"]["values"], ["all", "unread", "needs_reply", "due"])
+
+        for rel in ("app/app.md", "app/skills/whatsapp-ops/SKILL.md"):
+            text = (REPO / rel).read_text(encoding="utf-8")
+            self.assertNotIn("whatsapp.inspect", text)
+            self.assertNotIn("whatsapp.link", text)
+            self.assertNotIn("favcrm_company_id", text)
+        self.assertIn("canvas_open", (REPO / "app" / "skills" / "whatsapp-ops" / "SKILL.md").read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()

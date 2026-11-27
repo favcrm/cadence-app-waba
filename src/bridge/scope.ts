@@ -3,7 +3,7 @@ import { useEffect,useRef,useSyncExternalStore } from "react";
 import { exact } from "./channel";
 import { OPERATIONS,type Section } from "./services";
 export interface DisplayScope { installId: string; digest: string; provider?: "linked" }
-export interface Route { section: Section; view: "list" | "new"; record_id: string | null; segment_id: string | null }
+export interface Route { section: Section; view: "list" | "new"; record_id: string | null; segment_id: string | null; params?: Record<string, string> }
 export interface ScopeSnapshot { scope: DisplayScope; digest: string; actions: string[]; route: Route; presentationLocale: "en" | "zh-TW" }
 let snapshot: ScopeSnapshot | null = null;
 let error: string | null = null;
@@ -57,9 +57,30 @@ export const routable = (v: string) => /^[a-z0-9_-]{1,64}$/.test(v);
 export const routeId = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(v);
 const digest = (v: unknown) => typeof v === "string" && /^sha256:[a-f0-9]{64}$/.test(v);
 function invalid(): never { throw new ApiError("Invalid WhatsApp scope projection", 502); }
+const PARAM_NAME = /^[a-z_]{1,24}$/;
+const NO_CONTROLS = /^[^\u0000-\u001f\u007f-\u009f\u2028\u2029]*$/;
+function parseRouteParams(v: unknown): Record<string, string> | undefined {
+  if (v === undefined) return undefined;
+  if (!obj(v)) invalid();
+  const entries = Object.entries(v);
+  if (entries.length > 6) invalid();
+  const out: Record<string, string> = {};
+  for (const [key, val] of entries) {
+    if (!PARAM_NAME.test(key) || typeof val !== "string" || val.length < 1 || val.length > 200 || !NO_CONTROLS.test(val)) invalid();
+    out[key] = val;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
 export function parseRoute(v: unknown): Route {
-  if (!obj(v) || !exact(v, ["section", "view", "record_id", "segment_id"]) || (v.section !== "connection" && v.section !== "inbox") || (v.view !== "list" && v.view !== "new") || (v.record_id !== null && !routeId(v.record_id)) || (v.segment_id !== null && !routeId(v.segment_id))) invalid();
-  return v as unknown as Route;
+  if (!obj(v) || !exact(v, ["section", "view", "record_id", "segment_id", "params"]) || (v.section !== "connection" && v.section !== "inbox") || (v.view !== "list" && v.view !== "new") || (v.record_id !== null && !routeId(v.record_id)) || (v.segment_id !== null && !routeId(v.segment_id))) invalid();
+  const params = parseRouteParams(v.params);
+  return {
+    section: v.section as Section,
+    view: v.view as "list" | "new",
+    record_id: v.record_id as string | null,
+    segment_id: v.segment_id as string | null,
+    ...(params ? { params } : {}),
+  };
 }
 export function acceptPush(p: Record<string, unknown>): void {
   if (!exact(p, ["v", "op", "install_id", "context_id", "digest", "tag", "installation", "contexts", "runs", "outbox", "publish_intents", "sources", "defaults", "readiness", "actions", "now", "resume", "route", "read_observations", "presentation_locale"]) || p.tag !== "waba" || !routeId(p.install_id) || !(p.context_id === undefined || p.context_id === "" || routeId(p.context_id)) || !digest(p.digest) || !Array.isArray(p.actions) || !p.actions.every(a => typeof a === "string" && OPERATIONS.includes(a)) || new Set(p.actions).size !== p.actions.length) invalid();
