@@ -107,20 +107,26 @@ function row(v: unknown): ConversationRow {
   };
 }
 
+export function formatConversationPreviewText(rowItem: ConversationRow, zh: boolean): string {
+  const m = rowItem.lastMessage;
+  if (!m) return "";
+  const body = m.body?.trim() ? m.body.trim() : null;
+  if (m.mediaKind === "image") return `📷 ${body ?? (zh ? "相片" : "Photo")}`;
+  if (m.mediaKind === "video") return `🎥 ${body ?? (zh ? "影片" : "Video")}`;
+  if (m.mediaKind === "audio") {
+    return m.ptt ? (zh ? "🎤 語音訊息" : "🎤 Voice message") : (zh ? "🎵 音訊" : "🎵 Audio");
+  }
+  if (m.mediaKind === "document") {
+    return `📄 ${m.fileName?.trim() || body || (zh ? "文件" : "Document")}`;
+  }
+  return body ?? (zh ? "媒體附件" : "Attachment");
+}
+
 export function formatConversationPreview(rowItem: ConversationRow, zh: boolean): string {
   const m = rowItem.lastMessage;
   if (!m) return "";
   const prefix = m.direction === "outbound" ? (zh ? "你：" : "You: ") : "";
-  const body = m.body?.trim() ? m.body.trim() : null;
-  if (m.mediaKind === "image") return `${prefix}📷 ${body ?? (zh ? "相片" : "Photo")}`;
-  if (m.mediaKind === "video") return `${prefix}🎥 ${body ?? (zh ? "影片" : "Video")}`;
-  if (m.mediaKind === "audio") {
-    return `${prefix}${m.ptt ? (zh ? "🎤 語音訊息" : "🎤 Voice message") : (zh ? "🎵 音訊" : "🎵 Audio")}`;
-  }
-  if (m.mediaKind === "document") {
-    return `${prefix}📄 ${m.fileName?.trim() || body || (zh ? "文件" : "Document")}`;
-  }
-  return `${prefix}${body ?? (zh ? "媒體附件" : "Attachment")}`;
+  return `${prefix}${formatConversationPreviewText(rowItem, zh)}`;
 }
 export function parseConversations(v: unknown): Page<ConversationRow> & { inboxScope: string | null } {
   const d = door(v);

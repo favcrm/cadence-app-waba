@@ -16,18 +16,18 @@
     {
       "name": "client.js",
       "media_type": "text/javascript",
-      "size": 198084,
-      "sha256": "sha256:015ad826a95d263751827135c4d3c1ff4fd35e509c43b7f1490aa7cacbfd1aa7"
+      "size": 205727,
+      "sha256": "sha256:c43d84fb0d6d479f5c8436142c797f7d31820d7337b69a78638335a3bfcd5476"
     },
     {
       "name": "waba.css",
       "media_type": "text/css",
-      "size": 60941,
-      "sha256": "sha256:4cfbfb7ec6ea9f5ed9d6d641c3428a12e53578b560b7fa8fb53f50adee63f957"
+      "size": 65909,
+      "sha256": "sha256:c5a01932b5dbdc91b1d45c1c3c8627f8c4a5f8b02133b030bda2c236519a4071"
     }
   ],
   "provenance": {
-    "source_digest": "sha256:67a8225513a7a0ede6ff2e0e2277c03b8c209fd58bfa71e4fa4a9b9411255629",
+    "source_digest": "sha256:342ab0aaf4a66c7f04f035af04507847e48ee95164bc9466467ce1e9d335982a",
     "sdk_digest": "sha256:fd65c974511e63b3996e9fa7e438fb4e39df5f508d11636116ef150fcc123e35",
     "toolchain_digest": "sha256:e21cfc8222db408abe6ba5a482520639d9cf4b96481c19aff4b4246af8a65e42"
   },
