@@ -98,6 +98,7 @@ class Channel {
   private openThreadListeners = new Set<(conversationId: string) => void>();
   private outboundEchoListeners = new Set<(echo: WhatsAppOutboundEcho) => void>();
   private replyInset: ReplyInset | null = null;
+  private lastReplyInsetPx = 0;
   private acknowledgedInset: ReplyInset | null = null;
   private lastLayout: string | null = null;
   private nomination = 0;
@@ -127,6 +128,8 @@ class Channel {
   }
   get hostCompose(): boolean { return this.composeSupported; }
   get hostReplyLayout(): boolean { return this.replyLayoutSupported && !this.retired; }
+  get hostReplyOverlay(): boolean { return this.replyOverlaySupported && !this.retired; }
+  get lastReplyOverlayPx(): number { return this.lastReplyInsetPx; }
   publishReplyLayout(bounds: [number, number] | null): void {
     if (!this.hostReplyLayout || !this.port || this.conversationId === null) return;
     const key = bounds === null ? "hidden" : `${bounds[0]}:${bounds[1]}`;
@@ -311,6 +314,7 @@ class Channel {
           typeof data.seq !== "number" || !Number.isSafeInteger(data.seq) || data.seq < 1 ||
           typeof data.px !== "number" || !Number.isInteger(data.px) || data.px < 0 || data.px > 512) throw invalid();
       if (this.conversationId !== null && data.nomination === this.nomination && data.seq > (this.replyInset?.seq ?? 0)) {
+        if (data.px > 0) this.lastReplyInsetPx = data.px;
         this.replyInset = { nomination: data.nomination, seq: data.seq, px: data.px };
         this.announceReplyAvailability();
       }
