@@ -1,4 +1,4 @@
-import { ApiError,Button,EmptyState,ErrorNotice,Field,Loading,Notice,Select,type SelectOption } from "@cadence/screen-ui";
+import { ApiError,Button,EmptyState,ErrorNotice,Field,Loading,Notice } from "@cadence/screen-ui";
 import { Fragment,useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState,useSyncExternalStore,type ReactNode,type RefObject } from "react";
 import { channel, type WhatsAppOutboundEcho } from "../../bridge/channel";
 import { patchRoute } from "../../bridge/route";
@@ -9,7 +9,7 @@ import { dueLabel,effectiveThreadState,listThreadWork,saveThreadWork,validWorkRe
 import { useWorkBrowse } from "./useWorkBrowse";
 import { useLivePoll } from "./useLivePoll";
 import type { Recipient } from "./Templates";
-import { declinedReason,errorText,formatConversationPreview,formatMediaBytes,formatMediaDuration,mediaAspectRatio,mediaBadge,mediaExtTone,mediaKindLabel,mediaMetaSummary,parseConversation,parseConversations,parseDraft,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Draft,type LinkedMediaInfo,type Message,type ReplyState,type ReplyStatus } from "./door";
+import { declinedReason,errorText,formatConversationPreviewText,formatMediaBytes,formatMediaDuration,mediaAspectRatio,mediaBadge,mediaExtTone,mediaKindLabel,mediaMetaSummary,parseConversation,parseConversations,parseDraft,parseMessages,parsePrepared,parseReplyStatus,sendState,when,windowOpen,type Conversation,type ConversationRow,type Draft,type LinkedMediaInfo,type Message,type ReplyState,type ReplyStatus } from "./door";
 
 const PAGE = 25;
 /** What the copilot may show, derived from the host-granted actions (members get the draft read-only). */
@@ -113,13 +113,6 @@ function contactName(row: ConversationRow, phone: string | null, linked: boolean
   return phone ?? (linked ? phoneUnavailable(zh) : (zh ? "未知聯絡人" : "Unknown contact"));
 }
 
-function RowIdentity({ name, phone }: { name: string; phone: string | null }) {
-  return <span className="waba-row-name">
-    {name === phone ? <bdi className="waba-row-phone" dir="ltr">{phone}</bdi> : <span className="waba-row-title">{name}</span>}
-    {phone && phone !== name && <bdi className="waba-row-phone waba-muted" dir="ltr">{phone}</bdi>}
-  </span>;
-}
-
 function Avatar({ name, phone, group }: { name: string; phone?: string | null; group?: boolean }) {
   if (group) {
     return <span className="waba-avatar" aria-hidden="true">
@@ -174,7 +167,7 @@ async function readWhileIndexing<T>(
 }
 
 type Queue = "all" | "unread" | ThreadState | "due";
-const allQueues: readonly Queue[] = ["all", "unread", "needs_reply", "due", "waiting", "done"];
+const crmQueues: readonly (ThreadState | "due")[] = ["needs_reply", "due", "waiting", "done"];
 type WorkIndex = { records: Map<string, ThreadWork>; checked: Set<string> };
 const emptyWorkIndex = (): WorkIndex => ({ records: new Map(), checked: new Set() });
 function calendarDay(now: Date) {
@@ -460,24 +453,39 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
       : dueLoaded > 0 ? String(dueLoaded) : undefined;
     return { needsReply, waiting, done, dueBadge: dueExact };
   }, [rows, work, dueDay, queue, browse.page, extras.length]);
-  const queueOptions = useMemo<SelectOption[]>(() => {
-    const inboxGroup = inboxScope ? (zh ? "收件匣" : "Inbox") : undefined;
-    const workGroup = zh ? "跟進及狀態" : "Follow-up & status";
-    const opts: SelectOption[] = [
-      { value: "all", label: zh ? "全部對話" : "All chats", ...(rows.length > 0 ? { badge: String(rows.length) } : {}), ...(inboxGroup ? { group: inboxGroup } : {}) },
-      ...(canFilterUnread ? [{ value: "unread", label: zh ? "未讀" : "Unread", ...(unreadCount > 0 ? { badge: String(unreadCount) } : {}), ...(inboxGroup ? { group: inboxGroup } : {}) }] : []),
-    ];
-    if (inboxScope) {
-      opts.push(
-        { value: "needs_reply", label: threadStateLabel("needs_reply", zh), ...(queueStats.needsReply > 0 ? { badge: String(queueStats.needsReply) } : {}), group: workGroup },
-        { value: "due", label: zh ? "待跟進" : "Follow-ups due", ...(queueStats.dueBadge ? { badge: queueStats.dueBadge } : {}), group: workGroup },
-        { value: "waiting", label: threadStateLabel("waiting", zh), ...(queueStats.waiting > 0 ? { badge: String(queueStats.waiting) } : {}), group: workGroup },
-        { value: "done", label: threadStateLabel("done", zh), ...(queueStats.done > 0 ? { badge: String(queueStats.done) } : {}), group: workGroup },
-      );
-    }
-    return opts;
-  }, [inboxScope, zh, rows.length, canFilterUnread, unreadCount, queueStats]);
-  const activeQueueLabel = queueOptions.find(o => o.value === queue)?.label ?? (zh ? "全部對話" : "All chats");
+  const [queueFilterOpen, setQueueFilterOpen] = useState(false);
+  const queueFilterWrap = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!queueFilterOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (queueFilterWrap.current && !queueFilterWrap.current.contains(event.target as Node)) setQueueFilterOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); setQueueFilterOpen(false); }
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [queueFilterOpen]);
+  const queueLabel = (value: Queue) => {
+    if (value === "all") return zh ? "全部" : "All";
+    if (value === "unread") return zh ? "未讀" : "Unread";
+    if (value === "due") return zh ? "待跟進" : "Follow-ups due";
+    return threadStateLabel(value, zh);
+  };
+  const queueCount = (value: Queue): string | undefined => {
+    if (value === "unread") return unreadCount > 0 ? String(unreadCount) : undefined;
+    if (value === "needs_reply") return queueStats.needsReply > 0 ? String(queueStats.needsReply) : undefined;
+    if (value === "due") return queueStats.dueBadge;
+    if (value === "waiting") return queueStats.waiting > 0 ? String(queueStats.waiting) : undefined;
+    if (value === "done") return queueStats.done > 0 ? String(queueStats.done) : undefined;
+    return undefined;
+  };
+  const activeQueueLabel = queueLabel(queue);
+  const crmFilterActive = queue !== "all" && queue !== "unread";
   const visibleCount = queue === "due" ? extras.length : shown.length + extras.length;
   const failed = list === "failed";
   const browseLabel = queue === "due" ? (zh ? "查找跟進事項…" : "Finding follow-ups…") : (zh ? "搜尋已儲存名稱…" : "Searching saved names…");
@@ -491,19 +499,38 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
         </div>
         <input className="field waba-search" type="search" aria-label={zh ? "搜尋對話" : "Search conversations"} placeholder={zh ? "搜尋對話…" : "Search conversations…"} value={filter} onChange={e => setFilter(e.target.value)} />
         {(canFilterUnread || inboxScope) && <div className="waba-list-filters" role="group" aria-label={zh ? "篩選對話" : "Filter conversations"}>
-          <Select className="waba-queue-select" size="sm" full value={queue} options={queueOptions} aria-label={zh ? "選擇對話佇列" : "Filter conversation queue"} onChange={next => {
-            const matched = allQueues.find(value => value === next);
-            setQueue(matched ?? "all");
-          }} />
-          {inboxScope && <button type="button" className="waba-due-toggle" aria-pressed={queue === "due"} onClick={() => setQueue(queue === "due" ? "all" : "due")}>
-            <span className="waba-due-dot" aria-hidden="true" />
-            <span>{zh ? "待跟進" : "Due"}</span>
-            {queueStats.dueBadge && <span className="waba-due-count">{queueStats.dueBadge}</span>}
-          </button>}
+          <div className="waba-seg-group">
+            <button type="button" className="waba-seg-btn" aria-pressed={queue === "all"} onClick={() => { setQueue("all"); setQueueFilterOpen(false); }}>{zh ? "全部" : "All"}</button>
+            {canFilterUnread && <button type="button" className="waba-seg-btn" aria-pressed={queue === "unread"} onClick={() => { setQueue(queue === "unread" ? "all" : "unread"); setQueueFilterOpen(false); }}>
+              <span>{zh ? "未讀" : "Unread"}</span>
+              {unreadCount > 0 && <span className="waba-seg-count">{unreadCount > 99 ? "99+" : unreadCount}</span>}
+            </button>}
+          </div>
+          {inboxScope && <div ref={queueFilterWrap} className="waba-filter-pop-wrap">
+            <button type="button" className="waba-filter-btn" data-active={crmFilterActive ? "yes" : undefined} aria-haspopup="menu" aria-expanded={queueFilterOpen} aria-label={zh ? "進階篩選" : "Filter by status"} onClick={() => setQueueFilterOpen(v => !v)}>
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2.5 4h11M4.5 8h7M6.5 12h3" /></svg>
+              <span>{crmFilterActive ? activeQueueLabel : (zh ? "篩選" : "Filter")}</span>
+              {crmFilterActive && queueCount(queue) && <span className="waba-seg-count">{queueCount(queue)}</span>}
+            </button>
+            {queueFilterOpen && <div className="waba-work-menu" role="menu" aria-label={zh ? "跟進及狀態" : "Follow-up & status"}>
+              {crmQueues.map(option => {
+                const badge = queueCount(option);
+                return <button key={option} type="button" role="menuitemradio" aria-checked={queue === option} className="waba-work-menu-item" onClick={() => { setQueue(queue === option ? "all" : option); setQueueFilterOpen(false); }}>
+                  <span>{queueLabel(option)}</span>
+                  {badge && <span className="waba-work-menu-badge">{badge}</span>}
+                  {queue === option && <span className="waba-work-menu-check" aria-hidden="true">✓</span>}
+                </button>;
+              })}
+              {crmFilterActive && <>
+                <div className="waba-work-menu-sep" role="separator" />
+                <button type="button" role="menuitem" className="waba-work-menu-item" onClick={() => { setQueue("all"); setQueueFilterOpen(false); }}>{zh ? "顯示全部對話" : "Show all chats"}</button>
+              </>}
+            </div>}
+          </div>}
         </div>}
       </header>
       <div className="waba-list-scroll">
-      {queue !== "all" && list === "ok" && <div className="waba-active-filter">
+      {crmFilterActive && list === "ok" && <div className="waba-active-filter">
         <span>{zh ? `顯示 ${visibleCount} 項 · ${activeQueueLabel}` : `Showing ${visibleCount} · ${activeQueueLabel}`}</span>
         <button type="button" className="waba-active-reset" onClick={() => setQueue("all")}>{zh ? "重設" : "Reset"}</button>
       </div>}
@@ -529,22 +556,28 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
           const record = recordFor(r);
           const groupRow = linked && r.conversationId.endsWith("@g.us");
           const name = contactName(r, phone, linked, zh, record?.name), at = stamp(r.lastMessage?.createdAt ?? null);
-          const state = r.work && work.checked.has(r.work.ref) ? effectiveThreadState(record, r.work.inboundVersion) : null;
           const isDue = !!record?.due && record.due <= dueDay;
-          const flag = isDue ? dueLabel(record!.due!, dueDay, zh)
-            : state && state !== "needs_reply" ? threadStateLabel(state, zh) : null;
-          const flagTone = isDue ? (record!.due! < dueDay ? "overdue" : "due") : state === "done" ? "done" : "waiting";
           const unread = r.unreadCount ?? 0;
           const draftPreview = r.conversationId !== selected ? drafts[r.conversationId] : undefined;
-          const lastText = formatConversationPreview(r, zh);
+          const lastText = formatConversationPreviewText(r, zh);
+          const outboundLast = !draftPreview && r.lastMessage?.direction === "outbound";
           return <li key={r.conversationId}>
             <button type="button" className="waba-row" disabled={replyDirty || opening} aria-current={r.conversationId === selected ? "true" : undefined} data-unread={unread > 0 ? "yes" : undefined} onClick={e => { openRow.current = e.currentTarget; select(r.conversationId); }}>
               <Avatar name={name} phone={phone} group={groupRow} />
-              <RowIdentity name={name} phone={linked ? phone : null} />
-              {at === null ? <span /> : <time className="waba-row-time" dateTime={r.lastMessage?.createdAt ?? undefined}>{dayFormat[locale].format(at) === today ? timeFormat[locale].format(at) : listDate[locale].format(at)}</time>}
-              <span className="waba-row-last">{draftPreview ? <><span className="waba-draft-prefix">{zh ? "草稿：" : "Draft: "}</span>{draftPreview}</> : lastText}</span>
-              {unread > 0 && <span className="waba-badge" aria-label={zh ? `${unread} 則未讀訊息` : `${unread} unread`}>{unread > 99 ? "99+" : unread}</span>}
-              {flag && <span className="waba-row-flag" data-tone={flagTone}>{flag}</span>}
+              <span className="waba-row-top">
+                <span className="waba-row-title">{name === phone ? <bdi className="waba-row-phone" dir="ltr">{phone}</bdi> : name}</span>
+                {at !== null && <time className="waba-row-time" data-unread={unread > 0 ? "yes" : undefined} dateTime={r.lastMessage?.createdAt ?? undefined}>{dayFormat[locale].format(at) === today ? timeFormat[locale].format(at) : listDate[locale].format(at)}</time>}
+              </span>
+              <span className="waba-row-bottom">
+                <span className="waba-row-last">
+                  {outboundLast && <MessageStatusTick status="delivered" zh={zh} />}
+                  <span className="waba-row-preview">{draftPreview ? <><span className="waba-draft-prefix">{zh ? "草稿：" : "Draft: "}</span>{draftPreview}</> : lastText}</span>
+                </span>
+                {(isDue || unread > 0) && <span className="waba-row-tail">
+                  {isDue && <span className="waba-row-due-dot" data-tone={record!.due! < dueDay ? "overdue" : "due"} title={dueLabel(record!.due!, dueDay, zh)} aria-label={dueLabel(record!.due!, dueDay, zh)} />}
+                  {unread > 0 && <span className="waba-badge" aria-label={zh ? `${unread} 則未讀訊息` : `${unread} unread`}>{unread > 99 ? "99+" : unread}</span>}
+                </span>}
+              </span>
             </button>
           </li>;
         })}{extras.map(record => {
@@ -556,9 +589,12 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
             <button type="button" className="waba-row" aria-disabled={opening || undefined} disabled={replyDirty} aria-current={selected && (known?.conversationId === selected || resolved?.work?.ref === record.ref) ? "true" : undefined}
               onClick={e => { remember(record); void openWork(record.ref, e.currentTarget); }}>
               <Avatar name={name} phone={phone} group={groupRow} />
-              <RowIdentity name={name} phone={phone} />
-              <span />
-              <span className="waba-row-last">{record.due ? `${dueLabel(record.due, dueDay, zh)} · ${record.due}` : (zh ? "已儲存的對話名稱" : "Saved conversation name")}</span>
+              <span className="waba-row-top">
+                <span className="waba-row-title">{name === phone ? <bdi className="waba-row-phone" dir="ltr">{phone}</bdi> : name}</span>
+              </span>
+              <span className="waba-row-bottom">
+                <span className="waba-row-last"><span className="waba-row-preview">{record.due ? `${dueLabel(record.due, dueDay, zh)} · ${record.due}` : (zh ? "已儲存的對話名稱" : "Saved conversation name")}</span></span>
+              </span>
             </button>
           </li>;
         })}</ul>}
@@ -884,8 +920,11 @@ function Thread({ scope, id, initial, preview, initialUnread, inboxScope, work, 
     }
   }, [scope, id]);
   const [draft, setDraft] = useState<Draft | null>(null);
-  const [inserted, setInserted] = useState<{ text: string; n: number } | null>(null);
   const [assistNote, setAssistNote] = useState<string | null>(null);
+  const [briefBusy, setBriefBusy] = useState(false);
+  const [briefNote, setBriefNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const [handoffBusy, setHandoffBusy] = useState(false);
+  const [handoffNote, setHandoffNote] = useState<{ ok: boolean; text: string } | null>(null);
   const readDraft = useCallback(async (): Promise<boolean> => {
     if (!assist.show) { setDraft(null); return true; }
     // A failed read keeps what is shown: the chip never invents or drops a draft.
@@ -912,6 +951,35 @@ function Thread({ scope, id, initial, preview, initialUnread, inboxScope, work, 
     setAssistNote(null);
     try { await serviceCall(scope, "whatsapp.draft.discard", { conversation_id: id }); setDraft(null); }
     catch (e) { setAssistNote(errorText(e, "The draft could not be discarded.")); }
+  }
+  async function runBrief(guidance: string) {
+    if (!assist.brief || briefBusy) return;
+    setBriefBusy(true);
+    setBriefNote(null);
+    try {
+      await serviceSlot(scope, "chat.whatsapp.brief", { conversation_id: id, guidance: guidance.trim() });
+      setBriefNote({ ok: true, text: zh ? "AI 正在起草回覆，準備好後會直接顯示於輸入欄。" : "Drafting reply… it will appear inline once ready." });
+    } catch (e) {
+      setBriefNote({ ok: false, text: errorText(e, zh ? "未有要求助理起草。" : "The assistant was not asked (cancelled or refused).") });
+    } finally {
+      setBriefBusy(false);
+    }
+  }
+  async function runHandoff(kind: "set" | "release") {
+    if (handoffBusy) return;
+    setHandoffBusy(true);
+    setHandoffNote(null);
+    try {
+      if (kind === "set") await serviceCall(scope, "whatsapp.handoff.set", { conversation_id: id });
+      else await serviceSlot(scope, "whatsapp.handoff.release", { conversation_id: id });
+      setHandoffNote({ ok: true, text: kind === "set" ? (zh ? "已接手對話，AI 自動回覆已暫停。" : "Taken over. FavCRM AI is paused on this chat.") : (zh ? "已交回 AI 自動回覆。" : "Handed back. FavCRM AI may reply automatically again.") });
+    } catch (e) {
+      const reason = kind === "release" && declinedReason(e).cancelled ? "cancelled." : errorText(e, "the host refused it.");
+      setHandoffNote({ ok: false, text: `${kind === "set" ? "Not taken over" : "Not handed back"}: ${reason}` });
+    } finally {
+      setHandoffBusy(false);
+      void show();
+    }
   }
   const autoAdvanceWaiting = useCallback(() => {
     const current = workActionState.current;
@@ -1138,6 +1206,24 @@ function Thread({ scope, id, initial, preview, initialUnread, inboxScope, work, 
       setWorkBusy(false);
     }
   }
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const moreMenuWrap = useRef<HTMLDivElement>(null);
+  const moreMenuBtn = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!moreMenuOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (moreMenuWrap.current && !moreMenuWrap.current.contains(event.target as Node)) setMoreMenuOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); setMoreMenuOpen(false); moreMenuBtn.current?.focus({ preventScroll: true }); }
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [moreMenuOpen]);
   const title = headerRow ? contactName(headerRow, phone, linked, zh, record?.name) : (zh ? "對話" : "Conversation");
   const group = linked && id.endsWith("@g.us");
   const subtitle = group ? (zh ? "WhatsApp 群組" : "WhatsApp group") : phone ?? phoneUnavailable(zh);
@@ -1167,10 +1253,13 @@ function Thread({ scope, id, initial, preview, initialUnread, inboxScope, work, 
         {headerRow ? <button className="waba-details-trigger" ref={detailsButton} type="button" disabled={!c} aria-haspopup="dialog" aria-expanded={details} aria-label={`${identity}${zh ? "：" : ": "}${detailsLabel}`} onClick={() => details ? closeDetails() : setDetails(true)}>
           <Avatar name={title} phone={phone} group={group} />
           <span className="waba-thread-identity"><span className="waba-thread-title">{title === phone ? <bdi dir="ltr">{phone}</bdi> : title}</span>{subtitle !== title && <small className="waba-muted">{phone ? <bdi dir="ltr">{phone}</bdi> : subtitle}</small>}</span>
-          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M7.5 3v10m-4-10h9A1.5 1.5 0 0 1 14 4.5v7a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5v-7A1.5 1.5 0 0 1 3.5 3Z" /></svg>
         </button> : title}
       </h2>
-      {workLink && work.checked.has(workLink.ref) ? (() => {
+      {c?.handoffAt && <span className="waba-handoff-pill" title={`${zh ? "人工接手於" : "Taken over since"} ${when(c.handoffAt)}`}>
+        <span className="waba-work-dot" aria-hidden="true" />
+        <span>{zh ? "人工接手" : "AI paused"}</span>
+      </span>}
+      {workLink && work.checked.has(workLink.ref) && (() => {
         const currentState = effectiveThreadState(record, workLink.inboundVersion);
         const states: readonly ThreadState[] = ["needs_reply", "waiting", "done"];
         return <div ref={workMenuWrap} className="waba-work-menu-wrap">
@@ -1202,7 +1291,62 @@ function Thread({ scope, id, initial, preview, initialUnread, inboxScope, work, 
                 {currentState === option && <span className="waba-work-menu-check" aria-hidden="true">✓</span>}
               </button>
             ))}
-            <div className="waba-work-menu-sep" role="separator" />
+          </div>}
+        </div>;
+      })()}
+      <div className="waba-thread-head-actions">
+        {headerRow && <button
+          type="button"
+          className="waba-head-ico-btn"
+          disabled={!c}
+          aria-pressed={details}
+          aria-label={detailsLabel}
+          title={detailsLabel}
+          onClick={() => details ? closeDetails() : setDetails(true)}
+        >
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M7.5 3v10m-4-10h9A1.5 1.5 0 0 1 14 4.5v7a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5v-7A1.5 1.5 0 0 1 3.5 3Z" /></svg>
+        </button>}
+        <div ref={moreMenuWrap} className="waba-work-menu-wrap">
+          <button
+            ref={moreMenuBtn}
+            type="button"
+            className="waba-head-ico-btn"
+            aria-haspopup="menu"
+            aria-expanded={moreMenuOpen}
+            aria-label={zh ? "更多對話操作" : "More conversation actions"}
+            title={zh ? "更多操作" : "More actions"}
+            onClick={() => setMoreMenuOpen(openNow => !openNow)}
+          >
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><circle cx="3.5" cy="8" r="1.2" /><circle cx="8" cy="8" r="1.2" /><circle cx="12.5" cy="8" r="1.2" /></svg>
+          </button>
+          {moreMenuOpen && <div className="waba-work-menu" role="menu" aria-label={zh ? "對話操作" : "Conversation actions"}>
+            {c && !linked && (c.handoffAt ? handoff.release : handoff.set) && (
+              <button
+                type="button"
+                role="menuitem"
+                className="waba-work-menu-item"
+                disabled={handoffBusy}
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  void runHandoff(c.handoffAt ? "release" : "set");
+                }}
+              >
+                {c.handoffAt ? (zh ? "交回 AI 自動回覆…" : "Hand back to AI…") : (zh ? "人工接手對話" : "Take over conversation")}
+              </button>
+            )}
+            {assist.open && (
+              <button
+                type="button"
+                role="menuitem"
+                className="waba-work-menu-item"
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  void serviceCall(scope, "chat.whatsapp.open", { conversation_id: id }).catch(() => undefined);
+                }}
+              >
+                {zh ? "在助理中開啟" : "Open in assistant"}
+              </button>
+            )}
             {channel.hostUx && (
               <button
                 type="button"
@@ -1210,7 +1354,7 @@ function Thread({ scope, id, initial, preview, initialUnread, inboxScope, work, 
                 className="waba-work-menu-item"
                 onClick={() => {
                   onMarkUnread(id);
-                  closeWorkMenu(true);
+                  setMoreMenuOpen(false);
                 }}
               >
                 {zh ? "標記為未讀" : "Mark as unread"}
@@ -1221,18 +1365,21 @@ function Thread({ scope, id, initial, preview, initialUnread, inboxScope, work, 
               role="menuitem"
               className="waba-work-menu-item"
               onClick={() => {
-                closeWorkMenu(false);
+                setMoreMenuOpen(false);
                 setDetails(true);
               }}
             >
               {`${detailsLabel}…`}
             </button>
           </div>}
-        </div>;
-      })() : channel.hostUx ? (
-        <Button size="sm" variant="ghost" onClick={() => onMarkUnread(id)}>{zh ? "標記為未讀" : "Mark as unread"}</Button>
-      ) : null}
+        </div>
+      </div>
     </header>
+    {handoffNote && <div className="waba-reply-availability" role={handoffNote.ok ? "status" : "alert"}>
+      {handoffNote.ok
+        ? <Notice state="taken-over">{handoffNote.text} <Button size="sm" variant="ghost" onClick={() => setHandoffNote(null)}>{zh ? "關閉" : "Dismiss"}</Button></Notice>
+        : <ErrorNotice bare>{handoffNote.text} <Button size="sm" variant="ghost" onClick={() => setHandoffNote(null)}>{zh ? "關閉" : "Dismiss"}</Button></ErrorNotice>}
+    </div>}
     <div className="waba-conversation-body">
       <div className="waba-thread-main" ref={messagePane}>
         {replyAvailability === "blocked" && <div className="waba-reply-availability" role="status">
@@ -1344,12 +1491,32 @@ function Thread({ scope, id, initial, preview, initialUnread, inboxScope, work, 
           />
         </div>}
         {c && composeId === null && <footer className="waba-thread-footer">
-          <TakeoverBar scope={scope} id={id} handoffAt={c.handoffAt} rights={handoff} onChanged={() => { void show(); }} />
-          {assist.brief && <Brief scope={scope} id={id} canOpen={assist.open} />}
-          {draft && <DraftChip draft={draft} zh={zh} canInsert={canReply && (linked || windowOpen(c))} canDiscard={assist.discard} note={assistNote} onInsert={() => setInserted(i => ({ text: draft.text, n: (i?.n ?? 0) + 1 }))} onDiscard={() => { void discard(); }} />}
-          {canReply ? !(linked && channel.hostCompose) && <Composer scope={scope} conversationId={c.conversationId} handoffAt={c.handoffAt} freeformUntil={c.freeformUntil} open={scope.provider === "linked" || windowOpen(c)} autoTakeover={handoff.set} inserted={inserted} onSent={onSent} onChanged={reload} onDirtyChange={onReplyDirty} />
-            : <Notice state="read-only">You can read this inbox. Only the workspace operator can reply.</Notice>}
-          {canTemplate && <Button size="sm" disabled={replyDirty} onClick={() => onRecipient(c)}>{zh ? "使用已核准的範本…" : "Send an approved template…"}</Button>}
+          {canReply ? !(linked && channel.hostCompose) && <Composer
+            scope={scope}
+            conversationId={c.conversationId}
+            handoffAt={c.handoffAt}
+            freeformUntil={c.freeformUntil}
+            open={scope.provider === "linked" || windowOpen(c)}
+            autoTakeover={handoff.set}
+            inserted={null}
+            draft={draft}
+            canDiscardDraft={assist.discard}
+            onDiscardDraft={() => { void discard(); }}
+            canBrief={assist.brief}
+            briefBusy={briefBusy}
+            briefNote={briefNote}
+            assistNote={assistNote}
+            onBrief={runBrief}
+            onDismissBriefNote={() => setBriefNote(null)}
+            canTemplate={canTemplate}
+            onOpenTemplate={() => onRecipient(c)}
+            replyDirty={replyDirty}
+            onSent={onSent}
+            onChanged={reload}
+            onDirtyChange={onReplyDirty}
+          />
+            : <Notice state="read-only">{zh ? "你可以閱讀此收件匣。只有工作區擁有人可以回覆。" : "You can read this inbox. Only the workspace operator can reply."}</Notice>}
+          {!canReply && canTemplate && <Button size="sm" disabled={replyDirty} onClick={() => onRecipient(c)}>{zh ? "使用已核准的範本…" : "Send an approved template…"}</Button>}
         </footer>}
       </div>
     </div>
@@ -2006,31 +2173,6 @@ function MediaLightbox({
   </div>;
 }
 
-function Brief({ scope, id, canOpen }: { scope: DisplayScope; id: string; canOpen: boolean }) {
-  const [guidance, setGuidance] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
-  async function brief() {
-    setBusy(true); setNote(null);
-    try {
-      // The host draws the card over this exact guidance; its tap runs the brief, then opens the Assistant.
-      await serviceSlot(scope, "chat.whatsapp.brief", { conversation_id: id, guidance: guidance.trim() });
-      setNote("The assistant is drafting. The draft appears here when it is ready.");
-    } catch (e) { setNote(errorText(e, "The assistant was not asked (cancelled or refused).")); }
-    finally { setBusy(false); }
-  }
-  return <div className="waba-assist">
-    <Field label="Guidance for the assistant (optional)" hint="For example the tone, or what to offer. The assistant reads this conversation only.">
-      {c => <textarea {...c} className="field" rows={2} maxLength={2000} value={guidance} disabled={busy} onChange={e => setGuidance(e.target.value)} />}
-    </Field>
-    <div className="waba-head">
-      <Button size="sm" onClick={() => { void brief(); }} loading={busy}>Draft with assistant</Button>
-      {canOpen && <Button size="sm" variant="ghost" onClick={() => { void serviceCall(scope, "chat.whatsapp.open", { conversation_id: id }).catch(() => undefined); }}>Open assistant</Button>}
-    </div>
-    {note && <p className="waba-muted" role="status">{note}</p>}
-  </div>;
-}
-
 function DraftChip({ draft, zh, canInsert, canDiscard, note, onInsert, onCopy, onDiscard }: {
   draft: Draft;
   zh: boolean;
@@ -2069,56 +2211,102 @@ function DraftChip({ draft, zh, canInsert, canDiscard, note, onInsert, onCopy, o
   </Notice>;
 }
 
-/** Takeover state from the conversation read (`handoffAt`, FavCRM's one source of truth).
- *  Everyone sees the banner; only granted actions show buttons. After any refusal the
- *  conversation is read again and the host's own reason stays on screen. */
-function TakeoverBar({ scope, id, handoffAt, rights, onChanged }: { scope: DisplayScope; id: string; handoffAt: string | null; rights: Handoff; onChanged: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
-  async function run(kind: "set" | "release") {
-    setBusy(true); setNote(null);
-    try {
-      if (kind === "set") await serviceCall(scope, "whatsapp.handoff.set", { conversation_id: id });
-      else await serviceSlot(scope, "whatsapp.handoff.release", { conversation_id: id });
-      setNote({ ok: true, text: kind === "set" ? "Taken over. FavCRM's AI is paused on this conversation." : "Handed back. FavCRM's AI may reply automatically again." });
-    } catch (e) {
-      const reason = kind === "release" && declinedReason(e).cancelled ? "the card was cancelled." : errorText(e, "the host refused it.");
-      setNote({ ok: false, text: `${kind === "set" ? "Not taken over" : "Not handed back"}: ${reason}` });
-    }
-    setBusy(false); onChanged();
-  }
-  if (!handoffAt && !note && !rights.set) return null;
-  return <div className="waba-assist" aria-label="Takeover">
-    {handoffAt
-      ? <Notice state="taken-over"><strong>Taken over.</strong> FavCRM&apos;s AI is paused on this conversation since {when(handoffAt)}.</Notice>
-      : rights.set && <p className="waba-muted">FavCRM&apos;s AI may reply automatically here. Replying yourself pauses it.</p>}
-    {(handoffAt ? rights.release : rights.set) && <div className="waba-head">
-      {handoffAt
-        ? <Button size="sm" loading={busy} onClick={() => { void run("release"); }}>Hand back to AI…</Button>
-        : <Button size="sm" loading={busy} onClick={() => { void run("set"); }}>Take over</Button>}
-    </div>}
-    {note && (note.ok ? <p className="waba-muted" role="status">{note.text}</p> : <ErrorNotice bare>{note.text}</ErrorNotice>)}
-  </div>;
-}
-
 /** One reply = prepare (host mints the effect and digest) → the host-drawn
  *  approval SLOT over exactly the prepared text. Nothing is retried. */
 type Attempt = { text: string; effectId: string } & ({ state: "approving" } | { state: ReplyState } | { state: "checking" } | { state: "status"; status: ReplyStatus } | { state: "cancelled"; reason: string | null });
 
-function Composer({ scope, conversationId, handoffAt, freeformUntil, open, autoTakeover, inserted, onSent, onChanged, onDirtyChange }: { scope: DisplayScope; conversationId: string; handoffAt: string | null; freeformUntil: string | null; open: boolean; autoTakeover: boolean; inserted: { text: string; n: number } | null; onSent: () => void; onChanged: () => void; onDirtyChange: (dirty: boolean) => void }) {
+function Composer({
+  scope,
+  conversationId,
+  handoffAt,
+  freeformUntil,
+  open,
+  autoTakeover,
+  inserted,
+  draft,
+  canDiscardDraft,
+  onDiscardDraft,
+  canBrief,
+  briefBusy,
+  briefNote,
+  assistNote,
+  onBrief,
+  onDismissBriefNote,
+  canTemplate,
+  onOpenTemplate,
+  replyDirty,
+  onSent,
+  onChanged,
+  onDirtyChange,
+}: {
+  scope: DisplayScope;
+  conversationId: string;
+  handoffAt: string | null;
+  freeformUntil: string | null;
+  open: boolean;
+  autoTakeover: boolean;
+  inserted: { text: string; n: number } | null;
+  draft?: Draft | null;
+  canDiscardDraft?: boolean;
+  onDiscardDraft?: () => void;
+  canBrief?: boolean;
+  briefBusy?: boolean;
+  briefNote?: { ok: boolean; text: string } | null;
+  assistNote?: string | null;
+  onBrief?: (guidance: string) => Promise<void>;
+  onDismissBriefNote?: () => void;
+  canTemplate?: boolean;
+  onOpenTemplate?: () => void;
+  replyDirty?: boolean;
+  onSent: () => void;
+  onChanged: () => void;
+  onDirtyChange: (dirty: boolean) => void;
+}) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState<Attempt | null>(null);
+  const [dismissedDraftId, setDismissedDraftId] = useState<string | null>(null);
+  const [plusOpen, setPlusOpen] = useState(false);
+  const [briefPromptOpen, setBriefPromptOpen] = useState(false);
+  const [guidance, setGuidance] = useState("");
+  const plusWrap = useRef<HTMLDivElement>(null);
+  const plusBtn = useRef<HTMLButtonElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const submitting = useRef(false);
   const zh = useScope()?.presentationLocale === "zh-TW";
+  useEffect(() => {
+    setDismissedDraftId(prev => prev && draft?.draftId === prev ? prev : null);
+  }, [draft?.draftId]);
+  useEffect(() => {
+    if (!plusOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (plusWrap.current && !plusWrap.current.contains(event.target as Node)) {
+        setPlusOpen(false);
+        setBriefPromptOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setPlusOpen(false);
+        setBriefPromptOpen(false);
+        plusBtn.current?.focus({ preventScroll: true });
+      }
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [plusOpen]);
   useLayoutEffect(() => {
     const box = input.current;
     if (!box) return;
     box.style.height = "auto";
     box.style.height = `${box.scrollHeight}px`;
-  }, [text, open]);
+  }, [text, open, draft?.text]);
   useEffect(() => { onDirtyChange(!!text || busy || !!attempt && !["sent", "accepted", "failed", "refused", "cancelled"].includes(attempt.state)); }, [text, busy, attempt, onDirtyChange]);
   useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
   // Insert only fills the text for editing; nothing is prepared until Send…
@@ -2174,21 +2362,148 @@ function Composer({ scope, conversationId, handoffAt, freeformUntil, open, autoT
   // While an attempt's outcome is open, the composer is locked so the same
   // reply is never sent twice. The outcome stays visible if the window closes.
   const locked = !!attempt && !["sent", "accepted", "failed", "refused", "cancelled"].includes(attempt.state);
+  const ghostDraft = draft && draft.draftId !== dismissedDraftId ? draft : null;
+  const showGhost = open && !locked && !busy && !!ghostDraft && text === "";
+  function acceptGhost() {
+    if (!ghostDraft) return;
+    const nextText = ghostDraft.text;
+    setDismissedDraftId(ghostDraft.draftId);
+    setText(nextText);
+    requestAnimationFrame(() => {
+      const box = input.current;
+      if (!box) return;
+      box.focus();
+      const len = nextText.length;
+      box.setSelectionRange(len, len);
+    });
+  }
+  function dismissGhost() {
+    if (!ghostDraft) return;
+    setDismissedDraftId(ghostDraft.draftId);
+    if (canDiscardDraft && onDiscardDraft) onDiscardDraft();
+  }
   const outcome = attempt && <Outcome attempt={attempt} linked={scope.provider === "linked"} group={conversationId.endsWith("@g.us")} onCheck={() => { void check(attempt, undefined, true); }} onApproveAgain={() => { void approve(attempt); }} onDismiss={() => setAttempt(null)} />;
-  if (!open) return <div className="waba-composer">{outcome}<Notice state="window-closed">The 24-hour reply window is closed, so free text can&apos;t be sent to this customer. An approved template can still be sent.</Notice></div>;
+  if (!open) return <div className="waba-composer">
+    {outcome}
+    <Notice state="window-closed">
+      {zh ? "24 小時免費回覆時段已結束，現階段只可傳送已核准的範本訊息。" : "The 24-hour reply window is closed, so free text can’t be sent to this customer. An approved template can still be sent."}
+      {canTemplate && onOpenTemplate && <> <Button size="sm" variant="primary" disabled={replyDirty} onClick={onOpenTemplate}>{zh ? "傳送範本…" : "Send template…"}</Button></>}
+    </Notice>
+  </div>;
   const review = zh ? "檢查並核准回覆" : "Review reply";
+  const hasPlusMenu = !!((canTemplate && onOpenTemplate) || (canBrief && onBrief));
   return <div className="waba-composer">
     {outcome}
     {error && <ErrorNotice bare>{error}</ErrorNotice>}
-    <form className="waba-compose-box" onSubmit={e => { e.preventDefault(); if (open && !locked) void send(); }}>
-      <textarea ref={input} aria-label={zh ? "回覆" : "Reply"} placeholder={zh ? "輸入回覆…" : "Write a reply…"} rows={1} maxLength={4096} value={text} disabled={busy || locked} onChange={e => setText(e.target.value)} onKeyDown={e => {
-        if (e.key !== "Enter" || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing || e.keyCode === 229) return;
-        e.preventDefault();
-        if (!e.repeat && !busy && !locked) void send();
-      }} />
+    {assistNote && <p className="waba-muted" role="status">{assistNote}</p>}
+    {briefNote && <p className={briefNote.ok ? "waba-muted" : "waba-brief-err"} role={briefNote.ok ? "status" : "alert"}>
+      {briefNote.text}
+      {onDismissBriefNote && <> <button type="button" className="waba-active-reset" onClick={onDismissBriefNote}>{zh ? "關閉" : "Dismiss"}</button></>}
+    </p>}
+    <form className="waba-compose-box" data-ghost={showGhost ? "yes" : undefined} onSubmit={e => { e.preventDefault(); if (open && !locked) void send(); }}>
+      <div className="waba-compose-stage">
+        {showGhost && (
+          <div className="waba-ghost-text" aria-hidden="true">
+            <span>{ghostDraft.text}</span>
+          </div>
+        )}
+        <textarea
+          ref={input}
+          aria-label={zh ? "回覆" : "Reply"}
+          placeholder={showGhost ? "" : (zh ? "輸入回覆…" : "Write a reply…")}
+          rows={1}
+          maxLength={4096}
+          value={text}
+          disabled={busy || locked}
+          onChange={e => setText(e.target.value)}
+          onKeyDown={e => {
+            if (showGhost && e.key === "Tab" && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+              e.preventDefault();
+              acceptGhost();
+              return;
+            }
+            if (showGhost && e.key === "Escape" && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+              e.preventDefault();
+              dismissGhost();
+              return;
+            }
+            if (e.key !== "Enter" || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing || e.keyCode === 229) return;
+            e.preventDefault();
+            if (!e.repeat && !busy && !locked) void send();
+          }}
+        />
+      </div>
       <div className="waba-compose-foot">
-        {text && !busy && !locked && <Button size="sm" variant="ghost" onClick={() => { setText(""); input.current?.focus(); }}>{zh ? "清除草稿" : "Clear draft"}</Button>}
-        <span className="waba-muted">{zh ? "Enter 檢查回覆 · Shift+Enter 換行" : "Enter to review · Shift+Enter for a new line"}{freeformUntil && scope.provider !== "linked" ? ` · ${when(freeformUntil)}` : ""}</span>
+        <div className="waba-compose-left">
+          {hasPlusMenu && <div ref={plusWrap} className="waba-plus-wrap">
+            <button
+              ref={plusBtn}
+              type="button"
+              className="waba-compose-ico-btn"
+              aria-haspopup="menu"
+              aria-expanded={plusOpen}
+              aria-label={zh ? "更多輸入工具" : "More composer tools"}
+              title={zh ? "範本及助理工具" : "Templates & AI tools"}
+              disabled={busy || locked}
+              onClick={() => { setPlusOpen(v => !v); setBriefPromptOpen(false); }}
+            >
+              <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6" /></svg>
+            </button>
+            {plusOpen && <div className="waba-plus-menu" role="menu" aria-label={zh ? "輸入選項" : "Composer actions"}>
+              {canTemplate && onOpenTemplate && <button type="button" role="menuitem" className="waba-work-menu-item" disabled={replyDirty} onClick={() => { setPlusOpen(false); onOpenTemplate(); }}>
+                {zh ? "傳送已核准的範本…" : "Send an approved template…"}
+              </button>}
+              {canBrief && onBrief && !briefPromptOpen && <>
+                <button type="button" role="menuitem" className="waba-work-menu-item" disabled={briefBusy} onClick={() => { setPlusOpen(false); void onBrief(""); }}>
+                  {zh ? "用 AI 快速起草回覆" : "Draft reply with AI"}
+                </button>
+                <button type="button" role="menuitem" className="waba-work-menu-item" onClick={() => setBriefPromptOpen(true)}>
+                  {zh ? "附帶指示讓 AI 起草…" : "Draft with AI guidance…"}
+                </button>
+              </>}
+              {canBrief && onBrief && briefPromptOpen && <div className="waba-brief-pop">
+                <textarea
+                  className="field"
+                  rows={2}
+                  maxLength={2000}
+                  value={guidance}
+                  placeholder={zh ? "輸入語氣或重點（選填）…" : "Tone or offer guidance (optional)…"}
+                  disabled={briefBusy}
+                  onChange={e => setGuidance(e.target.value)}
+                />
+                <div className="waba-brief-pop-actions">
+                  <Button size="sm" variant="primary" loading={briefBusy} onClick={() => {
+                    const g = guidance;
+                    setPlusOpen(false);
+                    setBriefPromptOpen(false);
+                    setGuidance("");
+                    void onBrief(g);
+                  }}>{zh ? "生成草稿" : "Generate draft"}</Button>
+                </div>
+              </div>}
+            </div>}
+          </div>}
+          {canBrief && onBrief && !showGhost && <button
+            type="button"
+            className="waba-compose-ai-btn"
+            disabled={busy || locked || briefBusy}
+            title={zh ? "AI 起草回覆" : "Draft with AI"}
+            aria-label={zh ? "AI 起草回覆" : "Draft with AI"}
+            onClick={() => { void onBrief(""); }}
+          >
+            {briefBusy ? <span className="waba-inline-spin" aria-hidden="true" /> : <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 2.2 9.4 6l3.8 1.4-3.8 1.4L8 12.6 6.6 8.8 2.8 7.4 6.6 6Z" /></svg>}
+            <span>{zh ? "AI 起草" : "AI Draft"}</span>
+          </button>}
+          {showGhost && <span className="waba-ghost-controls">
+            <button type="button" className="waba-ghost-tab-btn" onClick={acceptGhost} title={zh ? "按 Tab 套用草稿" : "Press Tab to apply draft"}>
+              <kbd>Tab</kbd>
+              <span>{zh ? "套用 AI 草稿" : "Apply AI draft"}</span>
+            </button>
+            <button type="button" className="waba-ghost-dismiss" onClick={dismissGhost} aria-label={zh ? "略過草稿" : "Dismiss draft"} title={zh ? "按 Esc 略過" : "Esc to dismiss"}>×</button>
+          </span>}
+          {text && !busy && !locked && <Button size="sm" variant="ghost" onClick={() => { setText(""); input.current?.focus(); }}>{zh ? "清除" : "Clear"}</Button>}
+        </div>
+        <span className="waba-compose-hint waba-muted">{showGhost ? (zh ? "Tab 套用 · 直接輸入覆蓋" : "Tab to accept · Type to override") : (zh ? "Enter 檢查回覆 · Shift+Enter 換行" : "Enter to review · Shift+Enter for new line")}{freeformUntil && scope.provider !== "linked" ? ` · ${when(freeformUntil)}` : ""}</span>
         <button className="waba-compose-send" type="submit" aria-label={review} title={review} disabled={busy || locked || !text.trim()}>
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6" /></svg>
         </button>
