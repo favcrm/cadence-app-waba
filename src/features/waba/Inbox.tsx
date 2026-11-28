@@ -521,8 +521,9 @@ export default function Inbox({ scope, canReply, canTemplate, assist, handoff, r
   const visibleCount = queue === "due" ? extras.length : shown.length + extras.length;
   const failed = list === "failed";
   const browseLabel = queue === "due" ? (zh ? "查找跟進事項…" : "Finding follow-ups…") : (zh ? "搜尋已儲存名稱…" : "Searching saved names…");
-  const isFocusedMode = focusedThread && selected !== null && !newMessage;
-  return <section className="waba-page waba-inbox" data-selected={newMessage || selected ? "yes" : "no"} data-focused-thread={isFocusedMode ? "yes" : "no"} aria-label={zh ? "收件匣" : "Inbox"}>
+  const inlineCanvas = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("inline") === "1";
+  const isFocusedMode = (focusedThread || inlineCanvas) && selected !== null && !newMessage;
+  return <section className="waba-page waba-inbox" data-selected={newMessage || selected ? "yes" : "no"} data-focused-thread={isFocusedMode ? "yes" : "no"} data-inline-canvas={inlineCanvas ? "yes" : "no"} aria-label={zh ? "收件匣" : "Inbox"}>
     <div className="waba-list" aria-labelledby="waba-inbox-title">
       <header className="waba-list-head">
         <div className="waba-head">
