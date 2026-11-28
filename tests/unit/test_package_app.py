@@ -838,6 +838,23 @@ class SkillsPackagingTests(unittest.TestCase):
         self.assertIn("whatsapp.conversations.list", skill)
         self.assertIn('view: "inbox"', skill)
 
+    def test_waba_skill_contract_and_business_playbook_hygiene(self):
+        skill_path = REPO / "app" / "skills" / "whatsapp-ops" / "SKILL.md"
+        raw = skill_path.read_bytes()
+        self.assertLess(len(raw), pkg.SKILL_FILE_MAX_BYTES)
+        skill = raw.decode("utf-8")
+        self.assertNotIn("85261034412", skill)
+        self.assertNotIn("open, waiting, done", skill)
+        for required in (
+            "active_provider",
+            "reply_mode",
+            "read_only",
+            "needs_reply",
+            "@g.us",
+            "whatsapp.broadcasts.list",
+        ):
+            self.assertIn(required, skill)
+
 
 if __name__ == "__main__":
     unittest.main()
