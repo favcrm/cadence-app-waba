@@ -831,6 +831,13 @@ class SkillsPackagingTests(unittest.TestCase):
         self.assertNotIn("1px solid", compose_m.group(1))
         self.assertIn("border:0", compose_m.group(1).replace(" ", ""))
 
+    def test_waba_inline_canvas_single_column_and_chat_first_skill(self):
+        css = (REPO / "app" / "screens" / "waba" / "waba.css").read_text(encoding="utf-8")
+        self.assertRegex(css, r'data-inline-canvas="?yes"?')
+        skill = (REPO / "app" / "skills" / "whatsapp-ops" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("whatsapp.conversations.list", skill)
+        self.assertIn('view: "inbox"', skill)
+
 
 if __name__ == "__main__":
     unittest.main()

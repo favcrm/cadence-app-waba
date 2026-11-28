@@ -102,6 +102,11 @@ html[data-cadence-kit] body {
 .waba-inbox[data-focused-thread="yes"] { grid-template-columns: minmax(0, 1fr); }
 .waba-inbox[data-focused-thread="yes"] .waba-list { display: none; }
 .waba-inbox[data-focused-thread="yes"] .waba-back { display: inline-flex; }
+.waba-inbox[data-inline-canvas="yes"] { grid-template-columns: minmax(0, 1fr); }
+.waba-inbox[data-inline-canvas="yes"][data-selected="yes"] .waba-list { display: none; }
+.waba-inbox[data-inline-canvas="yes"][data-selected="no"] .waba-thread { display: none; }
+.waba-inbox[data-inline-canvas="yes"] .waba-list { margin-inline-end: 0; }
+.waba-inbox[data-inline-canvas="yes"] .waba-back { display: inline-flex; }
 
 .waba-conversation { --waba-chat-inset: clamp(0.75rem, 2.75vw, 1.75rem); display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; min-width: 0; }
 .waba-thread-head { min-height: 3.75rem; display: flex; gap: 0.5rem; align-items: center; padding: 0.375rem var(--waba-chat-inset); border-block-end: 1px solid color-mix(in srgb, var(--color-edge) 28%, transparent); }

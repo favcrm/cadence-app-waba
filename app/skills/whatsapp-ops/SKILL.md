@@ -60,17 +60,16 @@ Choose the least-privileged action the operator asked for:
 - **Broadcasts:** Prepare with non-sending `whatsapp.broadcast.draft`, verify reachability via `whatsapp.broadcast.estimate`, optionally stage 1 test via `whatsapp.broadcast.test.stage`, then `whatsapp.broadcast.stage` (optionally `send_at` 5m..7d ahead). Inspect `whatsapp.broadcast.results` or halt unsent recipients with `whatsapp.broadcast.stop.stage`.
 - **AI / Human Handoff:** `whatsapp.handoff.stage { provider: "official", conversation_id, mode: "takeover" | "release" }`.
 
-## 5. Open on Canvas
+## 5. Chat Summaries vs. Open on Canvas
 
-Use `canvas_open` whenever the user wants to inspect, follow, or reply to a WhatsApp conversation visually while chatting:
-
-- **Open one conversation (focused single-thread layout):**
+- **Listing latest enquiries, unread checks, or queue lookups:** Read via `whatsapp.conversations.list` / `whatsapp.conversations.search` (plus `inbox_work` if needed) and present a **concise contact/enquiry list in chat** (name/phone, latest message summary, timestamp, unread/needs-reply state, 24h window status). Do **not** auto-open `view: "inbox"` on Canvas unless the user explicitly asks to open the inbox.
+- **Inspecting or replying to a specific conversation:** Call `canvas_open` with the focused single-thread view:
   `canvas_open { app: "waba", view: "conversation", params: { id: "<conversation_id>", provider: "official" | "linked" } }`
   Works for both Official conversation IDs and Linked JIDs (e.g. `85261034412@s.whatsapp.net`).
-- **Open filtered Inbox queue:**
+- **Explicit request to open the queue:**
   `canvas_open { app: "waba", view: "inbox", params: { filter: "all" | "unread" | "needs_reply" | "due", provider: "official" | "linked" } }`
 
-When a conversation needs a parked reply draft (`whatsapp.reply.draft`) or staged send (`whatsapp.reply.stage`), opening the thread via `canvas_open` lets the owner inspect messages, inline images/PDFs, and accept the draft with `Tab`.
+When a conversation needs a parked reply draft (`whatsapp.reply.draft`) or staged send (`whatsapp.reply.stage`), opening the specific thread via `canvas_open` (`view: "conversation"`) lets the owner inspect messages, inline images/PDFs, and accept the draft with `Tab`.
 
 ## 6. Connection Lifecycle (`whatsapp.manage`)
 
